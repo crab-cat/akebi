@@ -99,4 +99,17 @@ To attach a figure, open study settings and **この問題の画像**, then sele
 {"images":[{"path":"attachments/figure.png","alt":"Figure caption","showOn":"answer"}]}
 ```
 
+Reusable Obsidian links are the preferred per-card image field, alongside distractors and explanations:
+
+~~~markdown
+#akebi/university/biology/terms
+
+細胞膜を構成する主な分子は？ :: リン脂質
+%%AKEBI {"dummies":["セルロース","核酸","デンプン"],"explanation":"リン脂質が二重層を形成する。","images":[{"link":"![[attachments/細胞膜.png]]","showOn":"question","alt":"細胞膜の模式図"}]}%%
+~~~
+
+The same Vault image may be referenced by any number of cards without copying it. Both plain Vault paths from older Akebi notes and Obsidian [[...]] / ![[...]] syntax are accepted. A question-phase image stays visible when revealing the answer; set showOn to "answer" to hide it until feedback. The image itself can be clicked to open the source file in Obsidian.
+
+Study settings → **この問題の画像リンク** provides both a Vault file picker and a field for pasting an Obsidian image link. Removing the attachment removes only the card reference, never the image file. Existing per-card metadata, learner history, original Q/A and Spaced Repetition schedule markers are preserved. On an image rename or move *while Akebi is loaded*, references in active card metadata are updated using Obsidian's rename event; if Akebi was not running or an unqualified filename is ambiguous, check the link manually. Inline metadata comments are not guaranteed to participate in Obsidian's own automatic link-renaming facility.
+
 Only vault-local raster images are resolved. Absolute paths, traversal, remote URLs and data URLs in authored metadata are rejected. The image frame reserves its size before loading so it cannot move the candidate bank during play. Selecting or unlinking an image uses an editor-aware metadata update; the original Q/A and SR comments remain unchanged.

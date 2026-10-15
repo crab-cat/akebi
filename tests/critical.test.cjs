@@ -152,3 +152,97 @@ test('local-image metadata, safe paths and tag-label editing preserve questions 
  [...dialog.contentEl.querySelectorAll('button')].find(b=>b.textContent==='表示名を保存').click();await new Promise(r=>setImmediate(r));
  assert.equal(owner.settings.tagLabels['university/biology'],'細胞生物学');h.close();
 });
+
+test('shared per-card Vault image links resolve, open and survive rename',async()=>{
+  const h=harness(),media=h.load('./media');
+  assert.equal(media.localImage('https://host/x.png'),null);
+  assert.equal(media.localImage('![[../secret.png]]'),null);
+  assert.equal(media.localImage('![[biology/細胞膜.png]]').path,'biology/細胞膜.png');
+  assert.equal(media.localImage('[[細胞膜.png|細胞膜の構造]]').alt,'細胞膜の構造');
+  assert.equal(media.localImage({path:'biology/細胞膜.png',showOn:'answer'}).showOn,'answer');
+  const original='#flashcards/university/biology/terms\n'+
+    '膜の構造は？ :: リン脂質二重層\n<!--SR:!2026-12-01,3,230-->\n'+
+    '%%AKEBI {"akebi":{"id":"membrane"},"dummies":["A","B","C"],"explanation":"脂質二重層。"}%%\n';
+  const card={source:'science.md',question:'膜の構造は？'};
+  const updated=media.patchImages(original,card,[
+    {link:'![[biology/細胞膜.png]]',alt:'細胞膜の模式図'},
+    {link:'[[細胞膜.png|細胞膜の図]]',showOn:'answer'}
+  ]);
+  assert(updated.includes('膜の構造は？ :: リン脂質二重層\n<!--SR:!2026-12-01,3,230-->'));
+  const meta=JSON.parse(updated.match(/%%AKEBI (\{.*\})%%/)[1]);
+  assert.equal(meta.akebi.id,'membrane');
+  assert.deepEqual([...meta.dummies],['A','B','C']);
+  assert.equal(meta.images[0].link,'![[biology/細胞膜.png]]');
+  assert.equal(meta.images[1].link,'![[細胞膜.png]]');
+  assert.equal(meta.images[1].alt,'細胞膜の図');
+  assert.throws(()=>media.patchImages(updated,card,[
+    '![[biology/細胞膜.png]]','![[biology/細胞膜.png]]'
+  ]));
+  const files=new Map([['biology/細胞膜.png',{path:'biology/細胞膜.png',name:'細胞膜.png',basename:'細胞膜',extension:'png'}]]);
+  const opened=[];
+  const app={
+    vault:{getAbstractFileByPath:path=>files.get(path),getResourcePath:f=>'app://resource/'+f.path},
+    metadataCache:{getFirstLinkpathDest:link=>link==='細胞膜.png'?files.get('biology/細胞膜.png'):null},
+    workspace:{openLinkText:async(link,source,newLeaf)=>opened.push({link,source,newLeaf})}
+  };
+  const modal=new h.api.AkebiStudyModal(app,{settings:{},_mastery:{}});
+  const container=h.window.document.body.createDiv();
+  const images=meta.images;
+  modal._renderCardImages(container,{source:'science.md',images},'question');
+  assert.equal(container.querySelectorAll('.akebi-card-image-link').length,1);
+  assert.equal(container.querySelector('img').alt,'細胞膜の模式図');
+  container.querySelector('button').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(opened[0].link,'biology/細胞膜.png');
+  assert.equal(opened[0].source,'science.md');
+  modal._renderCardImages(container,{source:'other.md',images},'answer');
+  assert.equal(container.querySelectorAll('.akebi-card-image-link').length,3);
+  const renamed=media.rewriteImageLinksInMarkdown(updated,
+    'biology/細胞膜.png','assets/細胞膜_修正版.png');
+  assert(renamed.includes('![[assets/細胞膜_修正版.png]]'));
+  assert(renamed.includes('![[細胞膜.png]]'),'ambiguous basename is left intact');
+  assert(renamed.includes('<!--SR:!2026-12-01,3,230-->'));
+  const renamedAll=media.rewriteImageLinksInMarkdown(updated,
+    'biology/細胞膜.png','assets/細胞膜_修正版.png',true);
+  assert.equal((renamedAll.match(/assets\/細胞膜_修正版.png/g)||[]).length,2);
+  assert.equal(media.rewriteImageLinksInMarkdown(renamedAll,
+    'biology/細胞膜.png','assets/細胞膜_修正版.png',true),renamedAll);
+  const documents=new Map([['science.md',updated],['other.md',original]]);
+  const vault={
+    getMarkdownFiles:()=>[...documents.keys()].map(path=>({path,extension:'md'})),
+    cachedRead:async f=>documents.get(f.path),
+    process:async(f,fn)=>documents.set(f.path,fn(documents.get(f.path))),
+    getFiles:()=>[{path:'assets/細胞膜_修正版.png',name:'細胞膜_修正版.png',extension:'png'}]
+  };
+  const plugin=new h.Plugin({vault});
+  plugin.settings={excludedPaths:[]};plugin._studyModal={cards:[]};
+  const count=await plugin.updateImageReferences('biology/細胞膜.png','assets/細胞膜_修正版.png');
+  assert.equal(count,1);
+  assert.equal(documents.get('science.md'),renamedAll);
+  assert.equal(documents.get('other.md'),original);
+  const edited=new Map([['science.md',original]]);
+  const app2={
+    vault:{
+      getAbstractFileByPath:path=>path==='science.md'?{path:'science.md',extension:'md'}:files.get(path),
+      getResourcePath:path=>path,
+      process:async(note,update)=>edited.set(note.path,update(edited.get(note.path)))
+    },
+    metadataCache:app.metadataCache,workspace:app.workspace
+  };
+  const editor=new h.api.AkebiStudyModal(app2,{settings:{},_mastery:{}});
+  editor.screen='study';editor.current={card:{...card,images:[]}};
+  const el=h.window.document.body.createDiv();
+  editor._renderImageEditor(el);
+  const field=el.querySelector('input[aria-label="画像リンク"]');
+  field.value='![[biology/細胞膜.png]]';
+  [...el.querySelectorAll('button')].find(b=>b.textContent==='画像リンクを追加').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert(edited.get('science.md').includes('"images":[{"link":"![[biology/細胞膜.png]]"'));
+  assert.equal(editor.current.card.images.length,1);
+  [...el.querySelectorAll('button')].find(b=>b.textContent==='解除').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(editor.current.card.images.length,0);
+  assert(!edited.get('science.md').includes('"images":'));
+  assert(files.has('biology/細胞膜.png'),'unlink must never delete the source image');
+  h.close();
+});

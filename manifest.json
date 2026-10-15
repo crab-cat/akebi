@@ -1,7 +1,7 @@
 {
   "id": "akebi",
   "name": "akebi",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "minAppVersion": "1.7.7",
   "description": "Practice Markdown flashcards and phrase-building exercises with adaptive review, focused decks, and local learning history.",
   "author": "crab-cat",

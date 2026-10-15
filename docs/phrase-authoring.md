@@ -62,3 +62,10 @@ Within `production`, different word order passes if the three required phrases a
 Use two or three chunks, normally one predicate/role per chunk. Do not put separate agents and negated predicates in a single unordered group when that could reverse the truth conditions. Chunk order itself is fixed; use an ordered chunk where causal/temporal ordering is the knowledge being tested. The global pool remains at most 15 phrases. Explicit chunk-local alternatives must be constructible from that same pool.
 
 The editor displays each relation in a fixed-height answer frame, with independent drop zones. The learner can choose a zone, drag a phrase, or swap two selected phrases. Grade only the full chunk assignments, never a sorted bag of the entire answer.
+
+
+## Reusing images across relationship questions
+
+Figures belong to individual cards as normal metadata, not to a copied image asset or a particular folder. Use images with an Obsidian Vault link (for example ![[figures/secretory-path.png]]) and showOn "question" or "answer". Two cards can reference the same image; removing one link does not remove the source file.
+
+Prefer a **question** image when the relationship is hard to visualize from prose alone; use an **answer** image for feedback that would otherwise reveal the result. Selecting a displayed image opens the source file in Obsidian. Do not put unrelated images on every card merely to fill space.

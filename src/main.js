@@ -2,6 +2,8 @@
 const { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require('obsidian');
 const { AkebiStudyModal } = require('./study');
 const {TagNamesModal,pickImage}=require('./dialogs');
+const {EXTENSIONS,localImage,rewriteImageLinksInMarkdown}=require('./media');
+const {excludedPath}=require('./taxonomy');
 
 const DEFAULTS = Object.freeze({
   recallLimitSeconds: 10, easyThresholdSeconds: 2, sentenceLimitSeconds: 120,
@@ -60,7 +62,12 @@ class Akebi extends Plugin {
     this.addRibbonIcon('sprout','akebi',()=>this.openStudy());
     this.registerObsidianProtocolHandler('akebi',()=>this.openStudy());
     this.addSettingTab(new AkebiSettings(this.app,this));
-    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void this.handleRename(file.path,oldPath);}));
+    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{
+      if(!file || !oldPath)return;
+      if(file.extension==='md')void this.handleRename(file.path,oldPath);
+      else if(EXTENSIONS.has((file.extension||'').toLowerCase()))
+        this.queueImageRename(oldPath,file.path);
+    }));
   }
   saveData(data) {
     const snapshot=JSON.parse(JSON.stringify(data));
@@ -153,6 +160,43 @@ class Akebi extends Plugin {
       this._mastery=this.normalizeIds(this._mastery);this.settings.idAliases={...this.aliases};
       await this.saveData(this.settings);await this._saveMastery();
     }
+  }
+  queueImageRename(oldPath,newPath) {
+    this._imageRenameQueue=(this._imageRenameQueue||Promise.resolve())
+      .then(()=>this.updateImageReferences(oldPath,newPath))
+      .catch(error=>{
+        console.error('akebi: image link update failed',error);
+        new Notice('akebi: 画像のリンク更新に失敗しました。カード元のノートを確認してください。');
+      });
+    return this._imageRenameQueue;
+  }
+  async updateImageReferences(oldPath,newPath) {
+    const oldName=oldPath.split('/').pop();
+    // A bare basename is rewritten only if it is unambiguous in the Vault.
+    const other=this.app.vault.getFiles?.().some(f=>f.path!==newPath && f.name===oldName);
+    const allowBasename=other===false;
+    let changed=0;
+    for(const note of this.app.vault.getMarkdownFiles()){
+      if(excludedPath(note.path,this.settings.excludedPaths||[]))continue;
+      const raw=await this.app.vault.cachedRead(note);
+      if(!raw.includes('%%RMUX ')&&!raw.includes('%%AKEBI '))continue;
+      if(!raw.includes(oldPath)&&!(allowBasename&&raw.includes(oldName)))continue;
+      const next=rewriteImageLinksInMarkdown(raw,oldPath,newPath,allowBasename);
+      if(raw===next)continue;
+      await this.app.vault.process(note,current=>
+        rewriteImageLinksInMarkdown(current,oldPath,newPath,allowBasename));
+      changed++;
+    }
+    for(const card of this._studyModal?.cards||[]){
+      if(!Array.isArray(card.images))continue;
+      card.images=card.images.map(item=>{
+        const link=localImage(item);
+        if(!link || (link.path!==oldPath && !(allowBasename&&link.path===oldName)))return item;
+        return {...item,path:undefined,link:'![['+newPath+']]',
+          showOn:link.showOn,alt:link.alt};
+      });
+    }
+    return changed;
   }
   async importLegacy() {
     if(this._loadError)throw this._loadError;

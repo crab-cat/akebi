@@ -102,7 +102,7 @@ var require_taxonomy = __commonJS({
       const custom = Object.prototype.hasOwnProperty.call(labels, path) ? labels[path] : null;
       return typeof custom === "string" && custom.trim() ? custom.trim().slice(0, 80) : defaultLabel(path);
     }
-    function excludedPath(path, extra = []) {
+    function excludedPath2(path, extra = []) {
       if (typeof path !== "string") return true;
       if (/(?:^|\/)(?:(?:\d+[_-])?(?:archives?|backups?|quarantine|trash)|node_modules)(?:\/|$)/i.test(path)) return true;
       if (/\.bak(?:[-.]|$)|(?:^|\/)\./i.test(path)) return true;
@@ -161,7 +161,7 @@ var require_taxonomy = __commonJS({
       if (path === "university/biology" && ["word", "sentence"].includes(settings.selectedStudyActivity)) path += settings.selectedStudyActivity === "sentence" ? "/sentences" : "/terms";
       return path;
     }
-    module2.exports = { tagPath, studyTags, cardPaths, tagLabel, defaultLabel, excludedPath, reviewKey, dedupeCards, makeTree, oldSelection };
+    module2.exports = { tagPath, studyTags, cardPaths, tagLabel, defaultLabel, excludedPath: excludedPath2, reviewKey, dedupeCards, makeTree, oldSelection };
   }
 });
 
@@ -589,113 +589,217 @@ var require_media = __commonJS({
   "src/media.js"(exports2, module2) {
     "use strict";
     var { Notice: Notice2 } = require("obsidian");
-    var EXTENSIONS = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
-    function localImage(value) {
-      const raw = typeof value === "string" ? { path: value } : value;
-      if (!raw || typeof raw.path !== "string") return null;
-      const path = raw.path.trim();
-      if (!path || path.startsWith("/") || /[:\\\r\n\0?#]/.test(path) || path.split("/").some((p) => !p || p === "." || p === "..") || !EXTENSIONS.has(path.split(".").pop().toLowerCase())) return null;
-      return { path, alt: typeof raw.alt === "string" ? raw.alt.slice(0, 200) : "", showOn: raw.showOn === "answer" ? "answer" : "question" };
+    var EXTENSIONS2 = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
+    var META = /^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/;
+    function localImage2(value) {
+      const raw = typeof value === "string" ? { link: value } : value;
+      if (!raw || typeof raw !== "object") return null;
+      const original = typeof raw.link === "string" ? raw.link : raw.path;
+      if (typeof original !== "string") return null;
+      const input = original.trim();
+      const embedded = /^!?\[\[([^\[\]\r\n]+)\]\]$/.exec(input);
+      if ((input.startsWith("![") || input.startsWith("[[")) && !embedded) return null;
+      const pieces = embedded ? embedded[1].split("|") : [input];
+      if (pieces.length > 2) return null;
+      const path = pieces[0].trim();
+      if (!path || path.startsWith("/") || /[:\\\r\n\0?#\[\]|]/.test(path) || path.split("/").some((x) => !x || x === "." || x === "..") || !EXTENSIONS2.has(path.split(".").pop().toLowerCase())) return null;
+      const alt = typeof raw.alt === "string" && raw.alt.trim() ? raw.alt.trim() : (pieces[1] || "").trim();
+      if (/[\r\n]/.test(alt)) return null;
+      return {
+        link: "![[" + path + "]]",
+        path,
+        alt: alt.slice(0, 200),
+        showOn: raw.showOn === "answer" ? "answer" : "question"
+      };
+    }
+    function storedImage(image) {
+      const data = localImage2(image);
+      return data ? { link: data.link, alt: data.alt, showOn: data.showOn } : null;
+    }
+    function imageFieldValid(images) {
+      if (!Array.isArray(images) || images.length > 4) return false;
+      const list = images.map(storedImage);
+      return list.every(Boolean) && new Set(list.map((x) => x.link + "\0" + x.showOn)).size === list.length;
     }
     function patchImages(markdown, card, images) {
+      if (!imageFieldValid(images)) throw Error("\u753B\u50CF\u306FVault\u5185\u30EA\u30F3\u30AF\u30674\u4EF6\u307E\u3067\u3002\u91CD\u8907\u3057\u305F\u914D\u7F6E\u306F\u3067\u304D\u307E\u305B\u3093\u3002");
       const norm = (s) => String(s || "").normalize("NFKC").replace(/\s+/g, "").replace(/[?？!！。:：]/g, "");
       const newline = markdown.includes("\r\n") ? "\r\n" : "\n", lines = markdown.split(/\r?\n/), matches = [];
       let fence = false;
       for (let i2 = 0; i2 < lines.length; i2++) {
-        if (/^\s*`{3,}/.test(lines[i2])) {
+        if (/^\s*(?:\x60{3,}|~{3,})/.test(lines[i2])) {
           fence = !fence;
           continue;
         }
         if (fence || !lines[i2].includes(" :: ") || /^\s*(?:%%|<!--)/.test(lines[i2])) continue;
-        if (norm(lines[i2].split(" :: ")[0].replace(/^\s*(?:>\s*)+/, "")) === norm(card.question)) matches.push(i2);
+        const head = lines[i2].split(" :: ")[0].replace(/^\s*(?:>\s*)+/, "");
+        if (norm(head) === norm(card.question)) matches.push(i2);
       }
       if (matches.length !== 1) throw Error("\u5143\u306E\u30AB\u30FC\u30C9\u304C\u91CD\u8907\u3057\u3066\u3044\u308B\u304B\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002");
-      const row = matches[0];
-      let i = row + 1;
+      let i = matches[0] + 1;
       if (/^\s*<!--SR:[^>]*-->\s*$/.test(lines[i] || "")) i++;
-      const found = /^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/.exec(lines[i] || "");
-      const m = found ? JSON.parse(found[3]) : {};
-      if (!m || typeof m !== "object" || Array.isArray(m)) throw Error("\u30AB\u30FC\u30C9\u306E\u30E1\u30BF\u30C7\u30FC\u30BF\u304C\u4E0D\u6B63\u3067\u3059\u3002");
-      m.images = images.map(localImage).filter(Boolean);
-      if (m.images.length !== images.length || images.length > 4) throw Error("\u753B\u50CF\u306FVault\u5185\u306E\u30E9\u30B9\u30BF\u753B\u50CF\u30924\u4EF6\u307E\u3067\u6307\u5B9A\u3067\u304D\u307E\u3059\u3002");
-      if (!m.images.length) delete m.images;
-      const line = (found?.[1] || "") + "%%" + (found?.[2] || "AKEBI") + " " + JSON.stringify(m) + "%%";
+      const found = META.exec(lines[i] || "");
+      const meta = found ? JSON.parse(found[3]) : {};
+      if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw Error("\u30AB\u30FC\u30C9\u306E\u30E1\u30BF\u30C7\u30FC\u30BF\u304C\u4E0D\u6B63\u3067\u3059\u3002");
+      const values = images.map(storedImage);
+      if (values.length) meta.images = values;
+      else delete meta.images;
+      const line = (found?.[1] || "") + "%%" + (found?.[2] || "AKEBI") + " " + JSON.stringify(meta) + "%%";
       if (found) lines[i] = line;
       else lines.splice(i, 0, line);
       return lines.join(newline);
     }
+    function rewriteImageLinksInMarkdown2(markdown, oldPath, newPath, allowBasename = false) {
+      const renamed = localImage2({ path: newPath });
+      if (!renamed) return markdown;
+      const oldName = oldPath.split("/").pop();
+      const newline = markdown.includes("\r\n") ? "\r\n" : "\n", lines = markdown.split(/\r?\n/);
+      let changed = false;
+      for (let i = 0; i < lines.length; i++) {
+        const found = META.exec(lines[i]);
+        if (!found) continue;
+        let meta;
+        try {
+          meta = JSON.parse(found[3]);
+        } catch (_) {
+          continue;
+        }
+        if (!Array.isArray(meta?.images)) continue;
+        let rewritten = false;
+        meta.images = meta.images.map((original) => {
+          const current = localImage2(original);
+          if (!current) return original;
+          if (current.path !== oldPath && !(allowBasename && current.path === oldName)) return original;
+          rewritten = true;
+          return { ...storedImage(original), link: renamed.link };
+        });
+        if (rewritten) {
+          lines[i] = found[1] + "%%" + found[2] + " " + JSON.stringify(meta) + "%%";
+          changed = true;
+        }
+      }
+      return changed ? lines.join(newline) : markdown;
+    }
+    function resolveImage(app, card, raw) {
+      const ref = localImage2(raw);
+      if (!ref) return null;
+      const exact = app?.vault?.getAbstractFileByPath?.(ref.path);
+      const linked = app?.metadataCache?.getFirstLinkpathDest?.(ref.path, card?.source || "");
+      const file = exact?.extension ? exact : linked;
+      return file && EXTENSIONS2.has((file.extension || "").toLowerCase()) ? { ref, file } : null;
+    }
     var mediaUI = {
       _renderCardImages(parent, card, phase) {
-        for (const data of (card.images || []).map(localImage).filter(Boolean).slice(0, 4)) {
-          if (data.showOn === "answer" && phase !== "answer") continue;
+        for (const raw of (card.images || []).slice(0, 4)) {
+          const ref = localImage2(raw);
+          if (!ref || ref.showOn === "answer" && phase !== "answer") continue;
           const fig = parent.createEl("figure", { cls: "akebi-card-image" });
-          const file = this.app.vault.getAbstractFileByPath?.(data.path);
-          if (file && EXTENSIONS.has((file.extension || "").toLowerCase())) {
-            const image = fig.createEl("img");
-            image.alt = data.alt || file.basename || "\u554F\u984C\u306E\u56F3";
-            image.draggable = false;
-            image.src = this.app.vault.getResourcePath(file);
-          } else fig.createEl("span", { text: "\u753B\u50CF\u3092\u540C\u671F\u4E2D\uFF1A" + data.path.split("/").pop(), cls: "sr-mastery-caption" });
-          if (data.alt) fig.createEl("figcaption", { text: data.alt });
+          const resolved = resolveImage(this.app, card, raw);
+          if (!resolved) {
+            fig.createEl("span", { text: "Vault\u5185\u753B\u50CF\u306E\u540C\u671F\u30FB\u30EA\u30F3\u30AF\u3092\u78BA\u8A8D\uFF1A" + ref.path, cls: "sr-mastery-caption" });
+            continue;
+          }
+          const open = fig.createEl("button", { cls: "akebi-card-image-link" });
+          open.type = "button";
+          open.setAttribute("aria-label", "Vault\u5185\u306E\u753B\u50CF\u3092\u958B\u304F\uFF1A" + (ref.alt || ref.path));
+          open.title = ref.link + " \xB7 \u30BF\u30C3\u30D7\u3057\u3066\u5143\u753B\u50CF\u3092\u958B\u304F";
+          const image = open.createEl("img");
+          image.alt = ref.alt || resolved.file.basename || "\u554F\u984C\u306E\u56F3";
+          image.draggable = false;
+          image.src = this.app.vault.getResourcePath(resolved.file);
+          open.addEventListener("click", () => {
+            void Promise.resolve(this.app.workspace?.openLinkText?.(resolved.file.path, card.source, true)).catch((error) => new Notice2("\u753B\u50CF\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\uFF1A" + String(error?.message || error)));
+          });
+          if (ref.alt) fig.createEl("figcaption", { text: ref.alt });
         }
       },
       async _saveCardImages(card, images) {
-        const file = this.app.vault.getAbstractFileByPath(card.source);
-        if (!file || file.extension !== "md" || typeof this.app.vault.process !== "function") throw Error("\u5B89\u5168\u306B\u66F4\u65B0\u3067\u304D\u308B\u5143\u30CE\u30FC\u30C8\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002");
-        const clean = images.map(localImage);
-        if (clean.some((x) => !x) || clean.length > 4) throw Error("Vault\u5185\u306E\u753B\u50CF\u30924\u4EF6\u307E\u3067\u9078\u3093\u3067\u304F\u3060\u3055\u3044\u3002");
-        await this.app.vault.process(file, (text) => patchImages(text, card, clean));
+        const note = this.app.vault.getAbstractFileByPath(card.source);
+        if (!note || note.extension !== "md" || typeof this.app.vault.process !== "function")
+          throw Error("\u5B89\u5168\u306B\u66F4\u65B0\u3067\u304D\u308B\u5143\u30CE\u30FC\u30C8\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002");
+        if (!imageFieldValid(images)) throw Error("\u753B\u50CF\u306FVault\u5185\u30EA\u30F3\u30AF\u30674\u4EF6\u307E\u3067\u3002");
+        const clean = images.map((raw) => {
+          const ref = localImage2(raw);
+          const file = resolveImage(this.app, card, raw)?.file;
+          if (!file) throw Error("Vault\u5185\u753B\u50CF\u3092\u89E3\u6C7A\u3067\u304D\u307E\u305B\u3093\uFF1A" + ref.path);
+          return { link: "![[" + file.path + "]]", alt: ref.alt, showOn: ref.showOn };
+        });
+        await this.app.vault.process(note, (text) => patchImages(text, card, clean));
         card.images = clean;
       },
       _renderImageEditor(layer) {
         const card = this.current?.card;
         if (!card || this.screen !== "study") return;
         const section = layer.createEl("details", { cls: "akebi-image-editor" });
-        section.createEl("summary", { text: "\u3053\u306E\u554F\u984C\u306E\u753B\u50CF" });
-        section.createEl("p", { text: "Vault\u5185\u306E\u753B\u50CF\u3092\u554F\u984C\u307E\u305F\u306F\u89E3\u8AAC\u306B\u7D10\u4ED8\u3051\u307E\u3059\u3002\u5916\u90E8URL\u306F\u8AAD\u307F\u8FBC\u307F\u307E\u305B\u3093\u3002", cls: "sr-mastery-caption" });
+        section.createEl("summary", { text: "\u3053\u306E\u554F\u984C\u306E\u753B\u50CF\u30EA\u30F3\u30AF" });
+        section.createEl("p", { text: "\u753B\u50CF\u306F4\u629E\u30FB\u89E3\u8AAC\u3068\u540C\u3058\u554F\u984C\u306E\u30C7\u30FC\u30BF\u306B\u4FDD\u5B58\u3002\u5225\u306E\u554F\u984C\u304B\u3089\u540C\u3058Vault\u753B\u50CF\u3092\u518D\u5229\u7528\u3067\u304D\u307E\u3059\u3002", cls: "sr-mastery-caption" });
         const items = section.createDiv();
-        const render = () => {
+        const refresh = () => {
           items.replaceChildren();
           for (const [i, item] of (card.images || []).entries()) {
-            const image = localImage(item);
+            const image = localImage2(item);
             if (!image) continue;
             const row = items.createDiv({ cls: "akebi-image-row" });
-            row.createSpan({ text: (image.showOn === "answer" ? "\u89E3\u8AAC\uFF1A" : "\u554F\u984C\uFF1A") + image.path.split("/").pop() });
+            row.createSpan({ text: (image.showOn === "answer" ? "\u89E3\u8AAC\uFF1A" : "\u554F\u984C\uFF1A") + image.link });
             const remove = row.createEl("button", { text: "\u89E3\u9664" });
             remove.addEventListener("click", async () => {
               try {
                 await this._saveCardImages(card, card.images.filter((_, j) => j !== i));
-                render();
-              } catch (e) {
-                new Notice2(String(e.message || e));
+                refresh();
+              } catch (error) {
+                new Notice2(String(error.message || error));
               }
             });
           }
         };
-        render();
-        for (const [phase, label] of [["question", "\u554F\u984C\u306B\u753B\u50CF\u3092\u8FFD\u52A0"], ["answer", "\u89E3\u8AAC\u306B\u753B\u50CF\u3092\u8FFD\u52A0"]]) {
-          const button = section.createEl("button", { text: label });
-          button.addEventListener("click", async () => {
-            if ((card.images || []).length >= 4) {
-              new Notice2("\u753B\u50CF\u306F4\u4EF6\u307E\u3067\u3067\u3059\u3002");
-              return;
-            }
-            try {
-              button.disabled = true;
-              const file = await this.owner.pickImage();
-              if (!file) return;
-              await this._saveCardImages(card, [...card.images || [], { path: file.path, alt: file.basename, showOn: phase }]);
-              render();
-            } catch (e) {
-              new Notice2(String(e.message || e));
-            } finally {
-              button.disabled = false;
-            }
-          });
-        }
+        refresh();
+        const label = section.createEl("label", { text: "Vault\u5185\u306E\u753B\u50CF\u30EA\u30F3\u30AF" });
+        const input = label.createEl("input");
+        input.type = "text";
+        input.placeholder = "![[attachments/\u7D30\u80DE\u819C.png]]";
+        input.setAttribute("aria-label", "\u753B\u50CF\u30EA\u30F3\u30AF");
+        const phaseLabel = section.createEl("label", { text: "\u8868\u793A\u30BF\u30A4\u30DF\u30F3\u30B0" });
+        const phase = phaseLabel.createEl("select");
+        phase.createEl("option", { text: "\u554F\u984C\u3068\u89E3\u8AAC" }).value = "question";
+        phase.createEl("option", { text: "\u89E3\u8AAC\u306E\u307F" }).value = "answer";
+        const add = section.createEl("button", { text: "\u753B\u50CF\u30EA\u30F3\u30AF\u3092\u8FFD\u52A0" });
+        add.addEventListener("click", async () => {
+          if (!input.value.trim()) return;
+          try {
+            add.disabled = true;
+            await this._saveCardImages(card, [...card.images || [], { link: input.value, showOn: phase.value }]);
+            input.value = "";
+            refresh();
+          } catch (error) {
+            new Notice2(String(error.message || error));
+          } finally {
+            add.disabled = false;
+          }
+        });
+        const pick = section.createEl("button", { text: "Vault\u304B\u3089\u753B\u50CF\u3092\u9078\u3076" });
+        pick.addEventListener("click", async () => {
+          if ((card.images || []).length >= 4) {
+            new Notice2("\u753B\u50CF\u306F4\u4EF6\u307E\u3067\u3067\u3059\u3002");
+            return;
+          }
+          try {
+            pick.disabled = true;
+            const file = await this.owner.pickImage();
+            if (!file) return;
+            await this._saveCardImages(card, [
+              ...card.images || [],
+              { link: "![[" + file.path + "]]", alt: file.basename, showOn: phase.value }
+            ]);
+            refresh();
+          } catch (error) {
+            new Notice2(String(error.message || error));
+          } finally {
+            pick.disabled = false;
+          }
+        });
       }
     };
-    module2.exports = { EXTENSIONS, localImage, patchImages, mediaUI };
+    module2.exports = { EXTENSIONS: EXTENSIONS2, localImage: localImage2, storedImage, patchImages, rewriteImageLinksInMarkdown: rewriteImageLinksInMarkdown2, resolveImage, mediaUI };
   }
 });
 
@@ -703,7 +807,7 @@ var require_media = __commonJS({
 var require_study = __commonJS({
   "src/study.js"(exports2, module2) {
     var { Modal, Notice: Notice2, setIcon, getAllTags } = require("obsidian");
-    var { tagPath, studyTags, cardPaths, tagLabel, excludedPath, reviewKey, dedupeCards, makeTree, oldSelection } = require_taxonomy();
+    var { tagPath, studyTags, cardPaths, tagLabel, excludedPath: excludedPath2, reviewKey, dedupeCards, makeTree, oldSelection } = require_taxonomy();
     var { studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank } = require_sentence();
     var STUDY_LEVELS = ["unseen", "weak", "known", "perfect"];
     var STUDY_LABELS = {
@@ -1111,7 +1215,7 @@ var require_study = __commonJS({
         back.addEventListener("click", () => this._renderHome());
       }
       async _loadCards() {
-        const files = this.app.vault.getMarkdownFiles().filter((f) => !excludedPath(f.path, this.owner.settings.excludedPaths || []));
+        const files = this.app.vault.getMarkdownFiles().filter((f) => !excludedPath2(f.path, this.owner.settings.excludedPaths || []));
         const collected = [];
         const observedTags = /* @__PURE__ */ new Set();
         for (const file of files) {
@@ -2111,7 +2215,7 @@ var require_study = __commonJS({
       }
     };
     Object.assign(AkebiStudyModal2.prototype, require_phrase_ui(), require_media().mediaUI);
-    module2.exports = { AkebiStudyModal: AkebiStudyModal2, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, reviewKey, excludedPath, makeTree, tagLabel };
+    module2.exports = { AkebiStudyModal: AkebiStudyModal2, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, reviewKey, excludedPath: excludedPath2, makeTree, tagLabel };
   }
 });
 
@@ -2120,7 +2224,7 @@ var require_dialogs = __commonJS({
   "src/dialogs.js"(exports2, module2) {
     "use strict";
     var { Modal, FuzzySuggestModal, Notice: Notice2 } = require("obsidian");
-    var { EXTENSIONS } = require_media();
+    var { EXTENSIONS: EXTENSIONS2 } = require_media();
     var { tagLabel, defaultLabel } = require_taxonomy();
     var ImagePicker = class extends FuzzySuggestModal {
       constructor(app, done) {
@@ -2129,7 +2233,7 @@ var require_dialogs = __commonJS({
         this.setPlaceholder("Vault\u5185\u306E\u753B\u50CF\u3092\u9078\u3076");
       }
       getItems() {
-        return this.app.vault.getFiles().filter((f) => EXTENSIONS.has(f.extension?.toLowerCase()));
+        return this.app.vault.getFiles().filter((f) => EXTENSIONS2.has(f.extension?.toLowerCase()));
       }
       getItemText(file) {
         return file.path;
@@ -2211,6 +2315,8 @@ var require_dialogs = __commonJS({
 var { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require("obsidian");
 var { AkebiStudyModal } = require_study();
 var { TagNamesModal, pickImage } = require_dialogs();
+var { EXTENSIONS, localImage, rewriteImageLinksInMarkdown } = require_media();
+var { excludedPath } = require_taxonomy();
 var DEFAULTS = Object.freeze({
   recallLimitSeconds: 10,
   easyThresholdSeconds: 2,
@@ -2298,7 +2404,10 @@ var Akebi = class extends Plugin {
     this.registerObsidianProtocolHandler("akebi", () => this.openStudy());
     this.addSettingTab(new AkebiSettings(this.app, this));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-      void this.handleRename(file.path, oldPath);
+      if (!file || !oldPath) return;
+      if (file.extension === "md") void this.handleRename(file.path, oldPath);
+      else if (EXTENSIONS.has((file.extension || "").toLowerCase()))
+        this.queueImageRename(oldPath, file.path);
     }));
   }
   saveData(data) {
@@ -2422,6 +2531,44 @@ var Akebi = class extends Plugin {
       await this.saveData(this.settings);
       await this._saveMastery();
     }
+  }
+  queueImageRename(oldPath, newPath) {
+    this._imageRenameQueue = (this._imageRenameQueue || Promise.resolve()).then(() => this.updateImageReferences(oldPath, newPath)).catch((error) => {
+      console.error("akebi: image link update failed", error);
+      new Notice("akebi: \u753B\u50CF\u306E\u30EA\u30F3\u30AF\u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u30AB\u30FC\u30C9\u5143\u306E\u30CE\u30FC\u30C8\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    });
+    return this._imageRenameQueue;
+  }
+  async updateImageReferences(oldPath, newPath) {
+    const oldName = oldPath.split("/").pop();
+    const other = this.app.vault.getFiles?.().some((f) => f.path !== newPath && f.name === oldName);
+    const allowBasename = other === false;
+    let changed = 0;
+    for (const note of this.app.vault.getMarkdownFiles()) {
+      if (excludedPath(note.path, this.settings.excludedPaths || [])) continue;
+      const raw = await this.app.vault.cachedRead(note);
+      if (!raw.includes("%%RMUX ") && !raw.includes("%%AKEBI ")) continue;
+      if (!raw.includes(oldPath) && !(allowBasename && raw.includes(oldName))) continue;
+      const next = rewriteImageLinksInMarkdown(raw, oldPath, newPath, allowBasename);
+      if (raw === next) continue;
+      await this.app.vault.process(note, (current) => rewriteImageLinksInMarkdown(current, oldPath, newPath, allowBasename));
+      changed++;
+    }
+    for (const card of this._studyModal?.cards || []) {
+      if (!Array.isArray(card.images)) continue;
+      card.images = card.images.map((item) => {
+        const link = localImage(item);
+        if (!link || link.path !== oldPath && !(allowBasename && link.path === oldName)) return item;
+        return {
+          ...item,
+          path: void 0,
+          link: "![[" + newPath + "]]",
+          showOn: link.showOn,
+          alt: link.alt
+        };
+      });
+    }
+    return changed;
   }
   async importLegacy() {
     if (this._loadError) throw this._loadError;
