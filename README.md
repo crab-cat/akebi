@@ -73,3 +73,30 @@ npm run build
 ## License
 
 MIT, copyright 2026 crab-cat. Built-in icons are supplied by Obsidian's `setIcon` API. Dictionaries and personal study notes remain separate from the code release, with their own licenses.
+
+## 0.8.1: chunks, images and named tag hierarchy
+
+New `sentence` schema v3 allows **unordered phrases within explicitly authored semantic chunks**. Correct membership/multiplicity in each chunk is required; wrong chunk assignment and affirmative/negative distractors still fail. Existing v2 cards remain exact-order unless deliberately authored as chunks. See [phrase authoring](docs/phrase-authoring.md).
+
+The answer frame is fixed-height and internally scrollable (default 320px, adjustable). Tap two placed phrases to swap them, double-tap the same phrase to return it, or drag between chunk zones and the candidate bank. The bank itself is not recreated when choosing a phrase and its position does not change as text wraps.
+
+Decks are now a single hierarchy of stable tags, for example:
+
+```text
+#flashcards/university/biology/terms
+#flashcards/university/biology/sentences
+#flashcards/university/linear-algebra
+#flashcards/english/cefr-j/a1
+```
+
+**Settings → タグ階層の表示名** lists the study-tag hierarchy and lets you name each node independently, such as `university` → 大学 and `university/biology` → 生物. This changes labels only, not tags, card IDs or learning history. Curriculum memberships become equivalent virtual branches. Folder navigation and cross-subject “all” study have been removed; the mastery-status “all” filter still applies inside a selected leaf. Japanese legacy tags remain readable and common categories have compatibility mappings.
+
+Archive, backup, quarantine and trash folders (including numbered archive folders) are excluded from scanning. These copies must not become fresh questions. A second guard deduplicates repeated IDs and identical question/answer content within each Rep. Original archived notes and history are not deleted.
+
+To attach a figure, open study settings and **この問題の画像**, then select a local image for the question or explanation. PNG, JPEG, GIF, WebP and AVIF are supported. Up to four references are stored in card metadata:
+
+```json
+{"images":[{"path":"attachments/figure.png","alt":"Figure caption","showOn":"answer"}]}
+```
+
+Only vault-local raster images are resolved. Absolute paths, traversal, remote URLs and data URLs in authored metadata are rejected. The image frame reserves its size before loading so it cannot move the candidate bank during play. Selecting or unlinking an image uses an editor-aware metadata update; the original Q/A and SR comments remain unchanged.

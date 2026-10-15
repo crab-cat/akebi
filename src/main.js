@@ -1,10 +1,12 @@
 'use strict';
 const { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require('obsidian');
 const { AkebiStudyModal } = require('./study');
+const {TagNamesModal,pickImage}=require('./dialogs');
 
 const DEFAULTS = Object.freeze({
   recallLimitSeconds: 10, easyThresholdSeconds: 2, sentenceLimitSeconds: 120,
   studyMode: 'choice', choiceMode: true, soundEnabled: true, soundVolume: 25,
+  sentenceAreaHeight: 320, tagLabels: {}, excludedPaths: [], selectedDeckTag:null,
   repSize: 10, selectedStudyStage: 'all', selectedStudyGenre: 'すべて',
   selectedStudyCourse: '', selectedStudyFolder: '', selectedStudyVocabulary: '',
   selectedStudyActivity: 'all', selectedStudyBrowseSubdecks: false
@@ -16,6 +18,9 @@ function settingsFrom(raw={}) {
     easyThresholdSeconds:finite(raw.easyThresholdSeconds,2,.5,10),
     sentenceLimitSeconds:finite(raw.sentenceLimitSeconds,120,45,300),
     repSize:Math.round(finite(raw.repSize,10,1,50)),
+    sentenceAreaHeight:finite(raw.sentenceAreaHeight,320,220,520),
+    tagLabels:raw.tagLabels && typeof raw.tagLabels==='object' && !Array.isArray(raw.tagLabels) ? raw.tagLabels : {},
+    excludedPaths:Array.isArray(raw.excludedPaths)?raw.excludedPaths.filter(x=>typeof x==='string'):[],
     soundVolume:finite(raw.soundVolume,25,0,100),
     studyMode:raw.studyMode==='slide'?'slide':'choice',
     selectedStudyStage:['all','unseen','weak','known','perfect'].includes(raw.selectedStudyStage)?raw.selectedStudyStage:'all',
@@ -87,6 +92,14 @@ class Akebi extends Plugin {
     } catch(error){new Notice('akebi: 学習画面を開けませんでした。既存ファイルは保持しています。');}
     finally{this._openingStudy=false;}
   }
+  pickImage(){return pickImage(this.app);}
+  async openTagNames(cards){
+    try{
+      if(!cards){const reader=new AkebiStudyModal(this.app,this);await reader._loadCards();cards=reader.cards;}
+      const {makeTree}=require('./taxonomy');
+      new TagNamesModal(this.app,this,[...makeTree(cards).keys(),...(this._knownTagPaths||[])]).open();
+    }catch(error){new Notice('タグの一覧を読み込めませんでした。');}
+  }
   async checkCards() {
     const modal=new AkebiStudyModal(this.app,this);
     try {
@@ -118,8 +131,11 @@ class Akebi extends Plugin {
   async adoptCardIds(cards) {
     let changed=false;
     for(const card of cards){
-      if(card.id!==card.legacyId && this._mastery[card.legacyId]){
-        this.aliases[card.legacyId]=card.id;changed=true;
+      const priorIds=[card.legacyId,...(card.duplicateIds||[])];
+      for(const id of priorIds){
+        if(id && id!==card.id && this._mastery[id] && this.aliases[id]!==card.id){
+          this.aliases[id]=card.id;changed=true;
+        }
       }
     }
     if(changed){
@@ -180,6 +196,7 @@ class AkebiSettings extends PluginSettingTab {
           try{b.setDisabled(true);const n=await this.plugin.importLegacy();new Notice(n+'件の履歴を取り込みました。');this.display();}
           catch(error){new Notice('akebi: '+String(error.message||error));b.setDisabled(false);}
         }));
+    new Setting(el).setName('タグ階層の表示名').setDesc('英語のタグ階層に大学・生物・単語などの表示名を付けます。').addButton(b=>b.setButtonText('一覧と編集').onClick(()=>this.plugin.openTagNames()));
     new Setting(el).setName('問題を検査').setDesc('不正なメタデータや再構成できない文を調べます。').addButton(b=>b.setButtonText('検査').onClick(()=>this.plugin.checkCards()));
     el.createEl('p',{text:'学習時間・音・Rep・出題形式は学習画面の設定から変更できます。全処理はVault内で完結し、ネットワーク通信は行いません。'});
   }

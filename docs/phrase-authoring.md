@@ -37,3 +37,28 @@ Schema v1 is read for backward compatibility and compacted without changing the 
 5. A wrong predicate and a timeout each record exactly one failure. Navigating away from the feedback must not drop or duplicate it.
 
 Morphological analyzers and corpora can suggest phrase boundaries or collocations. They do not decide scientific truth, negation scope, or which alternatives are valid. No corpus or analyzer is required at runtime.
+
+## Schema v3: semantic chunks instead of one global word order
+
+Version 0.8.1 adds `chunks` while keeping the fixed prefix and suffix. Each chunk has an ID, label, canonical tokens and `mode: "bag"` (unordered multiset) or `"ordered"` (exact token order). Concatenating the canonical chunks must still reconstruct the original answer exactly.
+
+```json
+{
+  "sentence": {
+    "schemaVersion": 3,
+    "prefix": "タンパク質は",
+    "chunks": [
+      {"id":"production","label":"合成の場","mode":"bag","tokens":["粗面小胞体で","合成","され、"]},
+      {"id":"transport","label":"輸送経路","mode":"bag","tokens":["ゴルジ体を","経て"]}
+    ],
+    "suffix": "分泌される。",
+    "distractors": ["核小体で","分解","されず、"]
+  }
+}
+```
+
+Within `production`, different word order passes if the three required phrases are present with the right multiplicity. Moving `ゴルジ体を` into `production`, selecting `されず、`, or duplicating a missing token does not pass. This is deterministic matching against **authored relations**, not unrestricted Japanese semantic understanding.
+
+Use two or three chunks, normally one predicate/role per chunk. Do not put separate agents and negated predicates in a single unordered group when that could reverse the truth conditions. Chunk order itself is fixed; use an ordered chunk where causal/temporal ordering is the knowledge being tested. The global pool remains at most 15 phrases. Explicit chunk-local alternatives must be constructible from that same pool.
+
+The editor displays each relation in a fixed-height answer frame, with independent drop zones. The learner can choose a zone, drag a phrase, or swap two selected phrases. Grade only the full chunk assignments, never a sorted bag of the entire answer.

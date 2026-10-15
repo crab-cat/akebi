@@ -1,1 +1,15 @@
-{"name":"akebi","version":"0.8.0","private":true,"description":"Local-first flashcards and constrained sentence assembly for Obsidian.","scripts":{"build":"node build.mjs","test":"node --test tests/critical.test.cjs"},"license":"MIT","devDependencies":{"esbuild":"0.25.12","jsdom":"26.1.0"}}
+{
+  "name": "akebi",
+  "version": "0.8.1",
+  "private": true,
+  "description": "Local-first flashcards and constrained sentence assembly for Obsidian.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test tests/critical.test.cjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "jsdom": "26.1.0"
+  }
+}

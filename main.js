@@ -4,10 +4,707 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
+// src/taxonomy.js
+var require_taxonomy = __commonJS({
+  "src/taxonomy.js"(exports2, module2) {
+    "use strict";
+    var LEGACY = Object.freeze({
+      "\u5927\u5B66\u4E00\u822C": "university",
+      "\u5927\u5B66": "university",
+      "\u4E00\u822C": "general",
+      "\u82F1\u5358\u8A9E": "english",
+      "\u96D1\u5B66": "trivia",
+      "\u8CC7\u683C": "certifications",
+      "\u751F\u7269\u5B66": "biology",
+      "\u751F\u7269": "biology",
+      "\u7DDA\u5F62\u4EE3\u6570": "linear-algebra",
+      "\u7DDA\u5F62\u4EE3\u6570\u5B66\u2161": "linear-algebra",
+      "\u7DDA\u5F62\u4EE3\u6570\u5B66II": "linear-algebra",
+      "\u5DE5\u5B66\u5FDC\u7528\u6570\u5B66": "applied-mathematics",
+      "\u95A2\u4FC2\u6027": "sentences",
+      "\u6587\u7AE0": "sentences",
+      "\u5358\u8A9E": "terms"
+    });
+    var LABELS = Object.freeze({
+      university: "\u5927\u5B66",
+      "university/biology": "\u751F\u7269",
+      "university/biology/terms": "\u5358\u8A9E",
+      "university/biology/sentences": "\u6587\u7AE0",
+      "university/linear-algebra": "\u7DDA\u5F62\u4EE3\u6570",
+      "university/applied-mathematics": "\u5DE5\u5B66\u5FDC\u7528\u6570\u5B66",
+      english: "\u82F1\u5358\u8A9E",
+      trivia: "\u96D1\u5B66",
+      certifications: "\u8CC7\u683C",
+      general: "\u4E00\u822C",
+      "english/cefr-j": "CEFR-J",
+      "english/ngsl": "\u4E00\u822C\u57FA\u790E",
+      "english/nawl": "\u5B66\u8853\u82F1\u8A9E",
+      "english/toeic": "TOEIC",
+      "english/ngsl-gr": "\u983B\u5EA6\u5225",
+      "english/programming": "\u30D7\u30ED\u30B0\u30E9\u30DF\u30F3\u30B0\u82F1\u8A9E"
+    });
+    function tagPath(value) {
+      if (typeof value !== "string") return "";
+      let s = value.trim().replace(/^#?(?:flashcards|akebi)(?:\/|$)/i, "").replace(/^#+|\/+$/g, "");
+      if (!s) return "general";
+      if (s.length > 360 || /[\r\n<>]/.test(s) || s.split("/").some((p) => !p || p === "." || p === "..")) return "";
+      s = s.replace(/^CEFR-J\//i, "english/cefr-j/").replace(/^NGSL\/一般基礎$/i, "english/ngsl").replace(/^NAWL\/学術$/i, "english/nawl").replace(/^TSL\/TOEIC$/i, "english/toeic").replace(/^NGSL-GR\/(\d+)$/i, (_, n) => "english/ngsl-gr/stage-" + String(Number(n)).padStart(2, "0")).replace(/^NGSL-GR\/補助語$/i, "english/ngsl-gr/supplement");
+      return s.split("/").map((p) => {
+        p = p.trim();
+        if (LEGACY[p]) return LEGACY[p];
+        if (/^Stage[ -]\d+$/i.test(p)) return "stage-" + String(Number(p.match(/\d+/)[0])).padStart(2, "0");
+        return p.toLowerCase().replace(/\s+/g, "-");
+      }).join("/");
+    }
+    function studyTags(markdown, cached = []) {
+      let clean = String(markdown).replace(/(^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]*\2[^\n]*(?=\n|$)/g, "\n").replace(/<!--[\s\S]*?-->/g, "").replace(/%%[\s\S]*?%%/g, "");
+      const tags = [...clean.matchAll(/(?:^|\s)#((?:flashcards|akebi)(?:\/[^\s#\]"',]+)?)(?=\s|$)/gm)].map((m) => m[1]);
+      if (!tags.length) {
+        const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(markdown))?.[1] || "";
+        const field = /^tags:[^\n]*(?:\n[ \t]+[^\n]*)*/m.exec(fm)?.[0] || "";
+        for (const m of field.matchAll(/(?:^|[\s\[,'"])(#?(?:flashcards|akebi)(?:\/[^\s\],"']+)?)(?=[\s\],"']|$)/gm)) tags.push(m[1]);
+      }
+      if (!tags.length) {
+        for (const value of cached || []) if (typeof value === "string" && /^#?(?:flashcards|akebi)(?:\/|$)/i.test(value)) tags.push(value);
+      }
+      return [...new Set(tags.map(tagPath).filter(Boolean))];
+    }
+    function membershipPath(value) {
+      if (/^CEFR-J\/|^NGSL\/|^NAWL\/|^TSL\/|^NGSL-GR\//i.test(value || "")) return tagPath(value);
+      if (/^(english|university|trivia|certifications)\//.test(value || "")) return tagPath(value);
+      return "";
+    }
+    function cardPaths(card, noteTags) {
+      let paths = Array.isArray(card.explicitTags) && card.explicitTags.length ? card.explicitTags.map(tagPath) : noteTags.slice();
+      paths = paths.map((p) => {
+        if (p === "university" && card.course) p += "/" + (LEGACY[card.course] || tagPath(card.course));
+        if (p === "university/biology") p += card.sentence ? "/sentences" : "/terms";
+        return p;
+      });
+      for (const value of card.vocab?.memberships || []) {
+        const path = membershipPath(value);
+        if (path) paths.push(path);
+      }
+      paths = [...new Set(paths.filter(Boolean))];
+      return paths.filter((p) => !paths.some((q) => q !== p && q.startsWith(p + "/")));
+    }
+    function defaultLabel(path) {
+      if (LABELS[path]) return LABELS[path];
+      const leaf = path.split("/").pop();
+      if (/^stage-\d+$/.test(leaf)) return "Stage " + Number(leaf.slice(6));
+      if (/^[ab][12]$/.test(leaf)) return leaf.toUpperCase();
+      if (leaf === "terms") return "\u5358\u8A9E";
+      if (leaf === "sentences") return "\u6587\u7AE0";
+      if (leaf === "supplement") return "\u88DC\u52A9\u8A9E";
+      return leaf || "\u30C7\u30C3\u30AD";
+    }
+    function tagLabel(path, labels = {}) {
+      const custom = Object.prototype.hasOwnProperty.call(labels, path) ? labels[path] : null;
+      return typeof custom === "string" && custom.trim() ? custom.trim().slice(0, 80) : defaultLabel(path);
+    }
+    function excludedPath(path, extra = []) {
+      if (typeof path !== "string") return true;
+      if (/(?:^|\/)(?:(?:\d+[_-])?(?:archives?|backups?|quarantine|trash)|node_modules)(?:\/|$)/i.test(path)) return true;
+      if (/\.bak(?:[-.]|$)|(?:^|\/)\./i.test(path)) return true;
+      return extra.some((p) => typeof p === "string" && p && (path === p || path.startsWith(p.replace(/\/$/, "") + "/")));
+    }
+    var normalizeText = (s) => String(s || "").normalize("NFKC").replace(/\s+/g, "");
+    function reviewKey(card) {
+      if (card.vocab?.lexemeId) return "lexeme:" + card.vocab.lexemeId;
+      return "content:" + normalizeText(card.question) + "\0" + normalizeText(card.answer);
+    }
+    function dedupeCards(cards) {
+      const byContent = /* @__PURE__ */ new Map();
+      const byId = /* @__PURE__ */ new Map();
+      let duplicates = 0;
+      const ordered = [...cards].sort((a, b) => Number(b.id.startsWith("akebi:")) - Number(a.id.startsWith("akebi:")) || a.source.localeCompare(b.source));
+      for (const c of ordered) {
+        c.reviewKey = reviewKey(c);
+        const previous = byId.get(c.id) || byContent.get(c.reviewKey);
+        if (previous) {
+          previous.tagPaths = [.../* @__PURE__ */ new Set([...previous.tagPaths || [], ...c.tagPaths || []])];
+          previous.duplicateIds = [.../* @__PURE__ */ new Set([...previous.duplicateIds || [], c.id])].filter((id) => id !== previous.id);
+          duplicates++;
+          continue;
+        }
+        byId.set(c.id, c);
+        byContent.set(c.reviewKey, c);
+      }
+      return { cards: [...byContent.values()], duplicates };
+    }
+    function makeTree(cards) {
+      const tree = /* @__PURE__ */ new Map([["", { path: "", parent: null, children: /* @__PURE__ */ new Set(), ids: /* @__PURE__ */ new Set(), direct: /* @__PURE__ */ new Set() }]]);
+      for (const c of cards) {
+        for (const path of c.tagPaths || [tagPath(c.deck || c.genre || "general")]) {
+          if (!path) continue;
+          const parts = path.split("/");
+          let parent = "";
+          tree.get("").ids.add(c.id);
+          for (let i = 0; i < parts.length; i++) {
+            const key = parts.slice(0, i + 1).join("/");
+            if (!tree.has(key)) tree.set(key, { path: key, parent, children: /* @__PURE__ */ new Set(), ids: /* @__PURE__ */ new Set(), direct: /* @__PURE__ */ new Set() });
+            tree.get(parent).children.add(key);
+            tree.get(key).ids.add(c.id);
+            parent = key;
+          }
+          tree.get(path).direct.add(c.id);
+        }
+      }
+      return tree;
+    }
+    function oldSelection(settings) {
+      if (typeof settings.selectedDeckTag === "string") return settings.selectedDeckTag;
+      if (settings.selectedStudyVocabulary) return tagPath(settings.selectedStudyVocabulary);
+      let path = tagPath(settings.selectedStudyGenre || "");
+      if (["\u3059\u3079\u3066", "\u5168\u3066", "all"].includes(settings.selectedStudyGenre) || !settings.selectedStudyGenre) return "";
+      if (path === "university" && settings.selectedStudyCourse) path += "/" + (LEGACY[settings.selectedStudyCourse] || tagPath(settings.selectedStudyCourse));
+      if (path === "university/biology" && ["word", "sentence"].includes(settings.selectedStudyActivity)) path += settings.selectedStudyActivity === "sentence" ? "/sentences" : "/terms";
+      return path;
+    }
+    module2.exports = { tagPath, studyTags, cardPaths, tagLabel, defaultLabel, excludedPath, reviewKey, dedupeCards, makeTree, oldSelection };
+  }
+});
+
+// src/sentence.js
+var require_sentence = __commonJS({
+  "src/sentence.js"(exports2, module2) {
+    "use strict";
+    var norm = (s) => String(s || "").normalize("NFKC").replace(/\s+/g, "");
+    var counter = (items) => {
+      const out = /* @__PURE__ */ new Map();
+      for (const t of items) out.set(norm(t), (out.get(norm(t)) || 0) + 1);
+      return out;
+    };
+    function contains(haystack, needle) {
+      const left = counter(haystack);
+      for (const t of needle) {
+        const k = norm(t), n = left.get(k) || 0;
+        if (!n) return false;
+        left.set(k, n - 1);
+      }
+      return true;
+    }
+    function sameBag(a, b) {
+      return a.length === b.length && contains(a, b);
+    }
+    function compactLegacy(raw) {
+      const particles = /* @__PURE__ */ new Set(["\u306F", "\u304C", "\u3092", "\u306B", "\u3078", "\u3067", "\u3068", "\u306E", "\u3084", "\u3082", "\u304B\u3089", "\u307E\u3067", "\u3067\u306F", "\u3068\u3057\u3066", "\u3002", "\u3001"]);
+      const units = [];
+      for (const t of raw.tokens || []) {
+        if (particles.has(t) && units.length) units[units.length - 1] += t;
+        else units.push(t);
+      }
+      if (units.length < 3) return null;
+      const prefix = units.shift(), suffix = units.pop();
+      while (units.length > 11) {
+        let i = 0;
+        for (let j = 1; j < units.length - 1; j++) if ((units[j] + units[j + 1]).length < (units[i] + units[i + 1]).length) i = j;
+        units.splice(i, 2, units[i] + units[i + 1]);
+      }
+      return { schemaVersion: 2, prefix, suffix, tokens: units, distractors: (raw.distractors || []).slice(0, 4), alternatives: [], concepts: raw.concepts || [], legacy: true };
+    }
+    function studySentenceSpec(card) {
+      let raw = card?.sentence;
+      if (!raw || typeof raw !== "object") return null;
+      if (raw.schemaVersion === 1) raw = compactLegacy(raw);
+      if (!raw || ![2, 3].includes(raw.schemaVersion)) return null;
+      if (typeof raw.prefix !== "string" || typeof raw.suffix !== "string" || !raw.prefix || !raw.suffix) return null;
+      let chunks;
+      if (raw.schemaVersion === 3) {
+        if (!Array.isArray(raw.chunks) || !raw.chunks.length || raw.chunks.length > 4) return null;
+        chunks = raw.chunks.map((c, i) => ({ id: typeof c.id === "string" ? c.id : "chunk-" + (i + 1), label: typeof c.label === "string" ? c.label : "\u95A2\u4FC2 " + (i + 1), mode: c.mode === "ordered" ? "ordered" : "bag", tokens: c.tokens, alternatives: c.alternatives || [] }));
+      } else chunks = [{ id: "sentence", label: "\u4E2D\u592E\u306E\u6587\u7AE0", mode: "ordered", tokens: raw.tokens, alternatives: raw.alternatives || [] }];
+      if (chunks.some((c) => !Array.isArray(c.tokens) || !c.tokens.length || c.tokens.length > 12 || !Array.isArray(c.alternatives) || c.alternatives.length > 8)) return null;
+      if (new Set(chunks.map((c) => c.id)).size !== chunks.length) return null;
+      const tokens = chunks.flatMap((c) => c.tokens), distractors = raw.distractors;
+      if (!Array.isArray(distractors) || !distractors.length || tokens.length < 3 || tokens.length + distractors.length > 15) return null;
+      const pool = [...tokens, ...distractors];
+      if (pool.some((t) => typeof t !== "string" || !t.trim() || t.length > 70 || /[\r\n]/.test(t))) return null;
+      const canonical = raw.prefix + tokens.join("") + raw.suffix;
+      if (norm(canonical) !== norm(card.answer)) return null;
+      if (Array.isArray(raw.tokens) && norm(raw.tokens.join("")) !== norm(tokens.join(""))) return null;
+      for (const chunk of chunks) {
+        chunk.tokens = chunk.tokens.slice();
+        if (chunk.alternatives.some((a) => !Array.isArray(a) || !a.length || a.length > 12 || a.some((t) => typeof t !== "string") || !contains(pool, a))) return null;
+        chunk.alternatives = chunk.alternatives.map((a) => a.slice());
+        chunk.maxLength = Math.max(chunk.tokens.length, ...chunk.alternatives.map((a) => a.length));
+        chunk.lengths = [.../* @__PURE__ */ new Set([chunk.tokens.length, ...chunk.alternatives.map((a) => a.length)])];
+      }
+      return {
+        schemaVersion: raw.schemaVersion,
+        prefix: raw.prefix,
+        suffix: raw.suffix,
+        tokens,
+        distractors: distractors.slice(),
+        chunks,
+        alternatives: raw.schemaVersion === 2 ? chunks[0].alternatives : [],
+        canonical,
+        maxLength: chunks.reduce((s, c) => s + c.maxLength, 0),
+        concepts: Array.isArray(raw.concepts) ? raw.concepts.filter((t) => typeof t === "string") : [],
+        legacy: !!raw.legacy
+      };
+    }
+    function studySentenceGrade(spec, selected) {
+      if (!spec || !Array.isArray(selected)) return { correct: false, chunks: [] };
+      const inputs = spec.schemaVersion === 3 ? selected : [Array.isArray(selected[0]) ? selected[0] : selected];
+      if (inputs.length !== spec.chunks.length || inputs.some((a) => !Array.isArray(a))) return { correct: false, chunks: spec.chunks.map(() => false) };
+      const text = inputs.map((a) => a.map((t) => typeof t === "string" ? t : t?.text));
+      if (text.flat().some((t) => typeof t !== "string") || !contains([...spec.tokens, ...spec.distractors], text.flat())) return { correct: false, chunks: spec.chunks.map(() => false) };
+      const results = spec.chunks.map((c, i) => [c.tokens, ...c.alternatives].some((a) => c.mode === "bag" ? sameBag(a, text[i]) : a.length === text[i].length && a.every((v, j) => norm(v) === norm(text[i][j]))));
+      return { correct: results.every(Boolean), chunks: results };
+    }
+    function studySentenceAccepted(spec, selected) {
+      return studySentenceGrade(spec, selected).correct;
+    }
+    function studySentenceBank(spec) {
+      if (!spec) return [];
+      const tiles = [...spec.tokens, ...spec.distractors];
+      for (let i = tiles.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+      }
+      return tiles.map((text, i) => ({ id: "piece-" + i, text }));
+    }
+    module2.exports = { studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank };
+  }
+});
+
+// src/phrase-ui.js
+var require_phrase_ui = __commonJS({
+  "src/phrase-ui.js"(exports2, module2) {
+    "use strict";
+    var { studySentenceGrade } = require_sentence();
+    var phraseUI = {
+      _sentenceCanEdit(q) {
+        if (!q || q !== this.current || q.state !== "front" || this.screen !== "study" || this.settingsOpen || this._inResumeGrace()) return false;
+        if (this._remaining() <= 0) {
+          this._reveal("timeout");
+          return false;
+        }
+        return true;
+      },
+      _sentenceLocation(q, id) {
+        for (let c = 0; c < q.sentenceChunks.length; c++) {
+          const index = q.sentenceChunks[c].indexOf(id);
+          if (index >= 0) return { chunk: c, index };
+        }
+        return null;
+      },
+      _sentenceCanClick(q) {
+        return performance.now() >= (this._suppressSentenceClickUntil || 0) && this._sentenceCanEdit(q);
+      },
+      _sentencePlace(q, id) {
+        if (!this._sentenceCanClick(q) || !q.sentenceBank.some((t) => t.id === id) || this._sentenceLocation(q, id)) return;
+        if (q.sentencePicked) {
+          this._sentenceMove(q, id, q.activeChunk, null, q.sentencePicked);
+          return;
+        }
+        let target = q.activeChunk;
+        if (q.sentenceChunks[target].length >= q.sentence.chunks[target].maxLength) {
+          target = q.sentenceChunks.findIndex((a, i) => a.length < q.sentence.chunks[i].maxLength);
+          if (target < 0) return;
+        }
+        this._sentenceMove(q, id, target);
+        if (q.sentenceChunks[target].length >= q.sentence.chunks[target].maxLength) {
+          const next = q.sentenceChunks.findIndex((a, i) => a.length < q.sentence.chunks[i].maxLength);
+          if (next >= 0) {
+            q.activeChunk = next;
+            this._refreshSentence(q);
+          }
+        }
+      },
+      _sentencePick(q, id) {
+        if (!this._sentenceCanClick(q)) return;
+        if (typeof id === "number") id = q.sentenceSelected[id];
+        const where = this._sentenceLocation(q, id);
+        if (!where) return;
+        if (q.sentencePicked === id) {
+          this._sentenceMove(q, id, -1);
+          return;
+        }
+        if (q.sentencePicked) {
+          this._sentenceMove(q, q.sentencePicked, where.chunk, where.index, id);
+          return;
+        }
+        q.sentencePicked = id;
+        q.activeChunk = where.chunk;
+        this._refreshSentence(q);
+      },
+      _sentenceChooseChunk(q, index) {
+        if (!this._sentenceCanClick(q) || !q.sentenceChunks[index]) return;
+        if (q.sentencePicked) {
+          this._sentenceMove(q, q.sentencePicked, index);
+          return;
+        }
+        q.activeChunk = index;
+        this._refreshSentence(q);
+      },
+      _sentenceMove(q, id, target, index = null, swapId = null) {
+        if (!this._sentenceCanEdit(q) || !q.sentenceBank.some((t) => t.id === id)) return false;
+        const from = this._sentenceLocation(q, id);
+        if (swapId === id) return false;
+        if (target === -1) {
+          if (!from) return false;
+          q.sentenceChunks[from.chunk].splice(from.index, 1);
+        } else if (swapId) {
+          const other = this._sentenceLocation(q, swapId);
+          if (!other) return false;
+          if (from) q.sentenceChunks[from.chunk][from.index] = swapId;
+          q.sentenceChunks[other.chunk][other.index] = id;
+          target = other.chunk;
+        } else {
+          const dest = q.sentenceChunks[target];
+          if (!dest) return false;
+          if (dest.length - (from?.chunk === target ? 1 : 0) >= q.sentence.chunks[target].maxLength) return false;
+          if (from) q.sentenceChunks[from.chunk].splice(from.index, 1);
+          const at = index === null ? dest.length : Math.max(0, Math.min(dest.length, index));
+          dest.splice(at, 0, id);
+        }
+        q.sentencePicked = null;
+        if (target >= 0) q.activeChunk = target;
+        this._refreshSentence(q);
+        return true;
+      },
+      _sentenceSubmit(q) {
+        if (!this._sentenceCanClick(q)) return;
+        if (!q.sentence.chunks.every((c, i) => c.lengths.includes(q.sentenceChunks[i].length))) return;
+        const bank = new Map(q.sentenceBank.map((t) => [t.id, t]));
+        const grouped = q.sentenceChunks.map((ids) => ids.map((id) => bank.get(id)));
+        if (grouped.flat().some((t) => !t) || new Set(q.sentenceSelected).size !== q.sentenceSelected.length) return;
+        const result = studySentenceGrade(q.sentence, grouped);
+        q.chunkResult = result;
+        q.responseMs = this._elapsed();
+        q.state = "back";
+        q.revealReason = "sentence";
+        q.choice = q.sentence.prefix + grouped.flat().map((t) => t.text).join("") + q.sentence.suffix;
+        this._rate(result.correct);
+      },
+      _refreshSentence(q) {
+        if (q !== this.current || !q.chunkBoards) return;
+        const scroll = this.main.scrollTop, inner = q.sentenceFrame.scrollTop;
+        q.sentenceSelected = q.sentenceChunks.flat();
+        const byId = new Map(q.sentenceBank.map((t) => [t.id, t]));
+        q.sentenceChunks.forEach((ids, c) => {
+          const board = q.chunkBoards[c];
+          board.replaceChildren();
+          if (!ids.length) board.createSpan({ text: "\u3053\u306E\u95A2\u4FC2\u306E\u8A9E\u53E5\u3092\u9078\u3076", cls: "akebi-placeholder" });
+          for (const id of ids) {
+            const chip = board.createEl("button", { text: byId.get(id).text, cls: "sr-sentence-chip sr-sentence-selected" });
+            chip.type = "button";
+            chip.setAttribute("data-piece", id);
+            chip.classList.toggle("is-picked", q.sentencePicked === id);
+            chip.setAttribute("aria-pressed", String(q.sentencePicked === id));
+            chip.setAttribute("aria-label", byId.get(id).text + "\u3002\u4E8C\u3064\u3092\u9078\u3093\u3067\u4EA4\u63DB\u3001\u540C\u3058\u8A9E\u53E5\u3092\u4E8C\u56DE\u3067\u623B\u3059");
+            chip.addEventListener("click", () => this._sentencePick(q, id));
+            this._bindSentencePointer(chip, q, id);
+          }
+          q.chunkBoxes[c].classList.toggle("is-active", q.activeChunk === c);
+          q.chunkTitles[c].setAttribute("aria-pressed", String(q.activeChunk === c));
+          q.chunkCounters[c].textContent = ids.length + " / " + q.sentence.chunks[c].tokens.length;
+        });
+        for (const [id, b] of q.bankButtons) {
+          const used = q.sentenceSelected.includes(id);
+          b.disabled = used || !q.sentencePicked && q.sentenceSelected.length >= q.sentence.maxLength;
+          b.classList.toggle("is-used", used);
+          b.setAttribute("aria-pressed", String(used));
+        }
+        q.checkButton.disabled = !q.sentence.chunks.every((c, i) => c.lengths.includes(q.sentenceChunks[i].length));
+        q.undoButton.disabled = !q.sentenceSelected.length;
+        q.sentenceCounter.textContent = q.sentenceSelected.length + " / " + q.sentence.tokens.length + " \u30D5\u30EC\u30FC\u30BA";
+        q.sentenceFrame.scrollTop = inner;
+        this.main.scrollTop = scroll;
+      },
+      _bindSentencePointer(el, q, id) {
+        el.addEventListener("pointerdown", (event) => {
+          if (event.isPrimary === false || event.button !== void 0 && event.button !== 0 || !this._sentenceCanEdit(q)) return;
+          this._cancelSentenceDrag();
+          this._sentenceDrag = { q, id, el, pointerId: event.pointerId, x: event.clientX, y: event.clientY, active: false, ghost: null };
+          try {
+            el.setPointerCapture(event.pointerId);
+          } catch (_) {
+          }
+        });
+        el.addEventListener("pointermove", (event) => {
+          const drag = this._sentenceDrag;
+          if (!drag || drag.el !== el || drag.pointerId !== event.pointerId) return;
+          if (!drag.active && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
+          if (!this._sentenceCanEdit(q)) {
+            this._cancelSentenceDrag();
+            return;
+          }
+          if (!drag.active) {
+            drag.active = true;
+            drag.ghost = this.modalEl.createDiv({ text: el.textContent, cls: "akebi-drag-ghost" });
+            el.classList.add("is-dragging");
+          }
+          event.preventDefault();
+          drag.ghost.style.transform = `translate(${event.clientX + 12}px,${event.clientY + 10}px)`;
+          const hit = this.contentEl.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
+          this.main.querySelectorAll(".is-drop-target").forEach((e) => e.classList.remove("is-drop-target"));
+          const zone = hit?.closest?.("[data-chunk-index],.sr-sentence-bank");
+          if (zone && this.main.contains(zone)) zone.classList.add("is-drop-target");
+          const box = this.main.getBoundingClientRect();
+          if (event.clientY < box.top + 28) this.main.scrollTop -= 12;
+          if (event.clientY > box.bottom - 28) this.main.scrollTop += 12;
+        });
+        el.addEventListener("pointerup", (event) => {
+          const drag = this._sentenceDrag;
+          if (!drag || drag.el !== el || drag.pointerId !== event.pointerId) return;
+          if (!drag.active) {
+            this._cancelSentenceDrag();
+            return;
+          }
+          event.preventDefault();
+          const hit = this.contentEl.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
+          this._suppressSentenceClickUntil = performance.now() + 350;
+          this._cancelSentenceDrag();
+          if (!hit || !this.main.contains(hit) || !this._sentenceCanEdit(q)) return;
+          const placed = hit.closest?.(".sr-sentence-selected");
+          if (placed) {
+            const targetId = placed.getAttribute("data-piece");
+            const where = this._sentenceLocation(q, targetId);
+            if (where) this._sentenceMove(q, id, where.chunk, where.index, targetId);
+            return;
+          }
+          const zone = hit.closest?.("[data-chunk-index]");
+          if (zone) {
+            this._sentenceMove(q, id, Number(zone.getAttribute("data-chunk-index")));
+            return;
+          }
+          if (hit.closest?.(".sr-sentence-bank")) this._sentenceMove(q, id, -1);
+        });
+        el.addEventListener("pointercancel", () => this._cancelSentenceDrag());
+        el.addEventListener("lostpointercapture", () => {
+          if (this._sentenceDrag?.el === el) this._cancelSentenceDrag();
+        });
+      },
+      _cancelSentenceDrag() {
+        const drag = this._sentenceDrag;
+        this._sentenceDrag = null;
+        if (drag) {
+          drag.ghost?.remove();
+          drag.el?.classList.remove("is-dragging");
+          try {
+            drag.el.releasePointerCapture(drag.pointerId);
+          } catch (_) {
+          }
+        }
+        this.main?.querySelectorAll?.(".is-drop-target").forEach((e) => e.classList.remove("is-drop-target"));
+      },
+      _renderSentenceQuestion(q) {
+        if (!q || q !== this.current) return;
+        this._cancelSentenceDrag();
+        this.modalEl.classList.remove("sr-mastery-timeout-mode");
+        this.main.replaceChildren();
+        this.clockValue = null;
+        this.clockBar = null;
+        this.main.createEl("p", { text: (this._scopeLabel?.() || q.card.course || q.card.genre) + " \xB7 \u95A2\u4FC2\u6027", cls: "sr-mastery-caption" });
+        if (this.rep) this.main.createEl("p", { text: "Rep " + this.rep.number + " \xB7 " + this.rep.attempted + "/" + this.rep.size + " \u56DE\u7B54", cls: "sr-mastery-rep-progress" });
+        this.main.createEl("h3", { text: q.card.question, cls: "sr-sentence-question" });
+        this._renderCardImages?.(this.main, q.card, q.state === "front" ? "question" : "answer");
+        if (q.state === "front") {
+          if (!q.sentenceChunks) q.sentenceChunks = q.sentence.chunks.map(() => []);
+          if (!Number.isInteger(q.activeChunk)) q.activeChunk = 0;
+          const clock = this.main.createDiv({ cls: "sr-mastery-clock" });
+          this.clockValue = clock.createSpan();
+          this.clockBar = clock.createDiv({ cls: "sr-mastery-clock-track" }).createDiv({ cls: "sr-mastery-clock-bar" });
+          const frame = this.main.createDiv({ cls: "akebi-sentence-frame" });
+          q.sentenceFrame = frame;
+          frame.style.setProperty("--akebi-answer-height", String(this.owner.settings.sentenceAreaHeight || 320) + "px");
+          frame.createEl("p", { text: q.sentence.prefix, cls: "akebi-fixed-boundary" });
+          q.chunkBoxes = [];
+          q.chunkBoards = [];
+          q.chunkTitles = [];
+          q.chunkCounters = [];
+          q.sentence.chunks.forEach((chunk, i) => {
+            const box = frame.createDiv({ cls: "akebi-chunk" });
+            box.setAttribute("data-chunk-index", String(i));
+            const title = box.createEl("button", { cls: "akebi-chunk-title" });
+            title.type = "button";
+            title.createSpan({ text: chunk.label });
+            const count = title.createSpan({ cls: "akebi-chunk-count" });
+            const board = box.createDiv({ cls: "sr-sentence-placed" });
+            board.setAttribute("aria-label", chunk.label + "\u306E\u30C1\u30E3\u30F3\u30AF");
+            box.addEventListener("click", (event) => {
+              if (event.target.closest(".sr-sentence-selected")) return;
+              this._sentenceChooseChunk(q, i);
+            });
+            q.chunkBoxes.push(box);
+            q.chunkBoards.push(board);
+            q.chunkTitles.push(title);
+            q.chunkCounters.push(count);
+          });
+          frame.createEl("p", { text: q.sentence.suffix, cls: "akebi-fixed-boundary" });
+          q.sentenceCounter = this.main.createEl("p", { cls: "sr-sentence-counter" });
+          this.main.createEl("p", { text: q.sentence.schemaVersion === 3 ? "\u30C1\u30E3\u30F3\u30AF\u5185\u306F\u8A9E\u9806\u4E0D\u554F\u3002\u4E8C\u3064\u3092\u30BF\u30C3\u30D7\u3057\u3066\u4EA4\u63DB\u3001\u540C\u3058\u8A9E\u53E5\u3092\u4E8C\u56DE\u3067\u623B\u3059\u3002\u30C9\u30E9\u30C3\u30B0\u3067\u3082\u79FB\u52D5\u3067\u304D\u307E\u3059\u3002" : "\u4E8C\u3064\u3092\u30BF\u30C3\u30D7\u3057\u3066\u4EA4\u63DB\u3001\u540C\u3058\u8A9E\u53E5\u3092\u4E8C\u56DE\u3067\u623B\u3059\u3002\u30C9\u30E9\u30C3\u30B0\u3067\u3082\u79FB\u52D5\u3067\u304D\u307E\u3059\u3002", cls: "sr-mastery-caption akebi-phrase-help" });
+          const pool = this.main.createDiv({ cls: "sr-sentence-bank" });
+          pool.setAttribute("role", "group");
+          pool.setAttribute("aria-label", "\u5168\u5019\u88DC\u30D5\u30EC\u30FC\u30BA");
+          q.bankButtons = /* @__PURE__ */ new Map();
+          for (const tile of q.sentenceBank) {
+            const b = pool.createEl("button", { text: tile.text, cls: "sr-sentence-chip sr-sentence-bank-chip" });
+            b.type = "button";
+            b.setAttribute("data-piece", tile.id);
+            b.addEventListener("click", () => this._sentencePlace(q, tile.id));
+            this._bindSentencePointer(b, q, tile.id);
+            q.bankButtons.set(tile.id, b);
+          }
+          const actions = this.main.createDiv({ cls: "sr-sentence-actions" });
+          q.undoButton = actions.createEl("button", { text: "\u623B\u3059" });
+          q.undoButton.type = "button";
+          q.undoButton.addEventListener("click", () => {
+            if (this._sentenceCanClick(q)) this._sentenceMove(q, q.sentencePicked || q.sentenceSelected.at(-1), -1);
+          });
+          q.checkButton = actions.createEl("button", { text: "\u7B54\u3048\u5408\u308F\u305B", cls: "mod-cta sr-sentence-check" });
+          q.checkButton.type = "button";
+          q.checkButton.addEventListener("click", () => this._sentenceSubmit(q));
+          this._refreshSentence(q);
+          this._tick();
+        } else {
+          const status = q.revealReason === "timeout" ? "\u6642\u9593\u5207\u308C \xB7 FAIL\u8A18\u9332\u6E08\u307F" : q.result?.correct ? "\u6B63\u89E3\uFF01" : "\u30C1\u30E3\u30F3\u30AF\u306E\u5F79\u5272\u30FB\u5BFE\u8C61\u30FB\u5426\u5B9A\u3092\u78BA\u8A8D";
+          this.main.createEl("p", { text: status, cls: "sr-sentence-result-status" });
+          const byId = new Map(q.sentenceBank.map((t) => [t.id, t]));
+          q.sentence.chunks.forEach((chunk, i) => {
+            const chosen = (q.sentenceChunks[i] || []).map((id) => byId.get(id)?.text || "").join("");
+            this.main.createEl("p", { text: chunk.label + (q.chunkResult?.chunks?.[i] === true ? " \u2713" : ""), cls: "sr-sentence-caption" });
+            this.main.createEl("p", { text: chosen || "\u672A\u56DE\u7B54", cls: "sr-sentence-attempt" });
+          });
+          this.main.createEl("p", { text: "\u6A21\u7BC4\u6587\uFF08\u8A9E\u9806\u306F\u4E00\u4F8B\uFF09", cls: "sr-sentence-caption" });
+          this.main.createEl("p", { text: q.sentence.canonical, cls: "sr-sentence-canonical" });
+          if (q.card.explanation) this.main.createEl("p", { text: q.card.explanation, cls: "sr-mastery-explanation" });
+          if (q.card.tips) this.main.createEl("p", { text: q.card.tips, cls: "sr-mastery-tips" });
+          const next = this.main.createEl("button", { text: "\u6B21\u306E\u554F\u984C\u306B\u9032\u3080", cls: "sr-mastery-next" });
+          next.addEventListener("click", () => {
+            if (this.current === q && q.state === "graded" && !this.settingsOpen) this._next();
+          });
+        }
+      }
+    };
+    module2.exports = phraseUI;
+  }
+});
+
+// src/media.js
+var require_media = __commonJS({
+  "src/media.js"(exports2, module2) {
+    "use strict";
+    var { Notice: Notice2 } = require("obsidian");
+    var EXTENSIONS = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
+    function localImage(value) {
+      const raw = typeof value === "string" ? { path: value } : value;
+      if (!raw || typeof raw.path !== "string") return null;
+      const path = raw.path.trim();
+      if (!path || path.startsWith("/") || /[:\\\r\n\0?#]/.test(path) || path.split("/").some((p) => !p || p === "." || p === "..") || !EXTENSIONS.has(path.split(".").pop().toLowerCase())) return null;
+      return { path, alt: typeof raw.alt === "string" ? raw.alt.slice(0, 200) : "", showOn: raw.showOn === "answer" ? "answer" : "question" };
+    }
+    function patchImages(markdown, card, images) {
+      const norm = (s) => String(s || "").normalize("NFKC").replace(/\s+/g, "").replace(/[?？!！。:：]/g, "");
+      const newline = markdown.includes("\r\n") ? "\r\n" : "\n", lines = markdown.split(/\r?\n/), matches = [];
+      let fence = false;
+      for (let i2 = 0; i2 < lines.length; i2++) {
+        if (/^\s*`{3,}/.test(lines[i2])) {
+          fence = !fence;
+          continue;
+        }
+        if (fence || !lines[i2].includes(" :: ") || /^\s*(?:%%|<!--)/.test(lines[i2])) continue;
+        if (norm(lines[i2].split(" :: ")[0].replace(/^\s*(?:>\s*)+/, "")) === norm(card.question)) matches.push(i2);
+      }
+      if (matches.length !== 1) throw Error("\u5143\u306E\u30AB\u30FC\u30C9\u304C\u91CD\u8907\u3057\u3066\u3044\u308B\u304B\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002");
+      const row = matches[0];
+      let i = row + 1;
+      if (/^\s*<!--SR:[^>]*-->\s*$/.test(lines[i] || "")) i++;
+      const found = /^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/.exec(lines[i] || "");
+      const m = found ? JSON.parse(found[3]) : {};
+      if (!m || typeof m !== "object" || Array.isArray(m)) throw Error("\u30AB\u30FC\u30C9\u306E\u30E1\u30BF\u30C7\u30FC\u30BF\u304C\u4E0D\u6B63\u3067\u3059\u3002");
+      m.images = images.map(localImage).filter(Boolean);
+      if (m.images.length !== images.length || images.length > 4) throw Error("\u753B\u50CF\u306FVault\u5185\u306E\u30E9\u30B9\u30BF\u753B\u50CF\u30924\u4EF6\u307E\u3067\u6307\u5B9A\u3067\u304D\u307E\u3059\u3002");
+      if (!m.images.length) delete m.images;
+      const line = (found?.[1] || "") + "%%" + (found?.[2] || "AKEBI") + " " + JSON.stringify(m) + "%%";
+      if (found) lines[i] = line;
+      else lines.splice(i, 0, line);
+      return lines.join(newline);
+    }
+    var mediaUI = {
+      _renderCardImages(parent, card, phase) {
+        for (const data of (card.images || []).map(localImage).filter(Boolean).slice(0, 4)) {
+          if (data.showOn === "answer" && phase !== "answer") continue;
+          const fig = parent.createEl("figure", { cls: "akebi-card-image" });
+          const file = this.app.vault.getAbstractFileByPath?.(data.path);
+          if (file && EXTENSIONS.has((file.extension || "").toLowerCase())) {
+            const image = fig.createEl("img");
+            image.alt = data.alt || file.basename || "\u554F\u984C\u306E\u56F3";
+            image.draggable = false;
+            image.src = this.app.vault.getResourcePath(file);
+          } else fig.createEl("span", { text: "\u753B\u50CF\u3092\u540C\u671F\u4E2D\uFF1A" + data.path.split("/").pop(), cls: "sr-mastery-caption" });
+          if (data.alt) fig.createEl("figcaption", { text: data.alt });
+        }
+      },
+      async _saveCardImages(card, images) {
+        const file = this.app.vault.getAbstractFileByPath(card.source);
+        if (!file || file.extension !== "md" || typeof this.app.vault.process !== "function") throw Error("\u5B89\u5168\u306B\u66F4\u65B0\u3067\u304D\u308B\u5143\u30CE\u30FC\u30C8\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002");
+        const clean = images.map(localImage);
+        if (clean.some((x) => !x) || clean.length > 4) throw Error("Vault\u5185\u306E\u753B\u50CF\u30924\u4EF6\u307E\u3067\u9078\u3093\u3067\u304F\u3060\u3055\u3044\u3002");
+        await this.app.vault.process(file, (text) => patchImages(text, card, clean));
+        card.images = clean;
+      },
+      _renderImageEditor(layer) {
+        const card = this.current?.card;
+        if (!card || this.screen !== "study") return;
+        const section = layer.createEl("details", { cls: "akebi-image-editor" });
+        section.createEl("summary", { text: "\u3053\u306E\u554F\u984C\u306E\u753B\u50CF" });
+        section.createEl("p", { text: "Vault\u5185\u306E\u753B\u50CF\u3092\u554F\u984C\u307E\u305F\u306F\u89E3\u8AAC\u306B\u7D10\u4ED8\u3051\u307E\u3059\u3002\u5916\u90E8URL\u306F\u8AAD\u307F\u8FBC\u307F\u307E\u305B\u3093\u3002", cls: "sr-mastery-caption" });
+        const items = section.createDiv();
+        const render = () => {
+          items.replaceChildren();
+          for (const [i, item] of (card.images || []).entries()) {
+            const image = localImage(item);
+            if (!image) continue;
+            const row = items.createDiv({ cls: "akebi-image-row" });
+            row.createSpan({ text: (image.showOn === "answer" ? "\u89E3\u8AAC\uFF1A" : "\u554F\u984C\uFF1A") + image.path.split("/").pop() });
+            const remove = row.createEl("button", { text: "\u89E3\u9664" });
+            remove.addEventListener("click", async () => {
+              try {
+                await this._saveCardImages(card, card.images.filter((_, j) => j !== i));
+                render();
+              } catch (e) {
+                new Notice2(String(e.message || e));
+              }
+            });
+          }
+        };
+        render();
+        for (const [phase, label] of [["question", "\u554F\u984C\u306B\u753B\u50CF\u3092\u8FFD\u52A0"], ["answer", "\u89E3\u8AAC\u306B\u753B\u50CF\u3092\u8FFD\u52A0"]]) {
+          const button = section.createEl("button", { text: label });
+          button.addEventListener("click", async () => {
+            if ((card.images || []).length >= 4) {
+              new Notice2("\u753B\u50CF\u306F4\u4EF6\u307E\u3067\u3067\u3059\u3002");
+              return;
+            }
+            try {
+              button.disabled = true;
+              const file = await this.owner.pickImage();
+              if (!file) return;
+              await this._saveCardImages(card, [...card.images || [], { path: file.path, alt: file.basename, showOn: phase }]);
+              render();
+            } catch (e) {
+              new Notice2(String(e.message || e));
+            } finally {
+              button.disabled = false;
+            }
+          });
+        }
+      }
+    };
+    module2.exports = { EXTENSIONS, localImage, patchImages, mediaUI };
+  }
+});
+
 // src/study.js
 var require_study = __commonJS({
   "src/study.js"(exports2, module2) {
     var { Modal, Notice: Notice2, setIcon, getAllTags } = require("obsidian");
+    var { tagPath, studyTags, cardPaths, tagLabel, excludedPath, reviewKey, dedupeCards, makeTree, oldSelection } = require_taxonomy();
+    var { studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank } = require_sentence();
     var STUDY_LEVELS = ["unseen", "weak", "known", "perfect"];
     var STUDY_LABELS = {
       unseen: "\u3084\u3063\u3066\u306A\u3044",
@@ -191,18 +888,16 @@ var require_study = __commonJS({
       return String(value || "").normalize("NFKC").replace(/\s+/g, "").replace(/[?？!！。:：]/g, "").trim();
     }
     function studyTag(text) {
-      const cleaned = String(text).replace(/<!--[\s\S]*?-->/g, "").replace(/%%[\s\S]*?%%/g, "");
-      const match = cleaned.match(/(?:^|\s)#(?:flashcards|akebi)(?:\/([^\s#\]]+))?(?=\s|$)/m);
-      if (!match) return null;
-      return match[1] || "\u4E00\u822C";
+      return studyTags(text)[0] || null;
     }
     var STUDY_MC_PREFIX = "%%RMUX ";
     var STUDY_MC_PATTERN = /^\s*%%(?:RMUX|AKEBI)\s+(\{.*\})\s*%%\s*$/;
     var STUDY_SR_PATTERN = /^\s*<!--SR:[^>]*-->\s*$/;
     function studyReadMetadata(lines, cardLine) {
       let offset = cardLine + 1;
-      if (STUDY_SR_PATTERN.test(lines[offset] || "")) offset++;
-      const match = STUDY_MC_PATTERN.exec(lines[offset] || "");
+      const clean = (line) => String(line || " ").replace(/^\s*(?:>\s*)+/, "");
+      if (STUDY_SR_PATTERN.test(clean(lines[offset]))) offset++;
+      const match = STUDY_MC_PATTERN.exec(clean(lines[offset]));
       if (!match) return null;
       try {
         const item = JSON.parse(match[1]);
@@ -226,7 +921,7 @@ var require_study = __commonJS({
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (!line.includes(" :: ") || line.trim().startsWith("%%") || line.trim().startsWith("<!--")) continue;
-        const head = line.split(" :: ")[0].trim();
+        const head = line.split(" :: ")[0].replace(/^\s*(?:>\s*)+/, "").trim();
         if (studyNormalize(head) === normalized) matches.push(i);
       }
       if (matches.length !== 1) throw new Error("\u540C\u3058\u554F\u984C\u304C\u898B\u3064\u304B\u3089\u306A\u3044\u304B\u3001\u91CD\u8907\u3057\u3066\u3044\u307E\u3059");
@@ -258,15 +953,18 @@ var require_study = __commonJS({
       if (tag.startsWith("\u5927\u5B66\u4E00\u822C/")) return tag.slice("\u5927\u5B66\u4E00\u822C/".length).split("/")[0];
       return null;
     }
-    function studyCards(file, markdown, tag) {
+    function studyCards(file, markdown, tag, declaredTags = null) {
+      const tags = declaredTags || studyTags(markdown);
+      tag = tag || tags[0] || "general";
       const result = [];
       let inFence = false;
       const course = studyCourseFromNote(markdown, file, tag);
       const folder = (file.path || "").split("/").slice(0, -1).join("/");
       const lines = markdown.split(/\r?\n/);
       for (let index = 0; index < lines.length; index++) {
-        const line = lines[index];
-        if (/^\s*`{3,}/.test(line)) {
+        const rawLine = lines[index];
+        const line = rawLine.replace(/^\s*(?:>\s*)+/, "");
+        if (/^\s*(?:`{3,}|~{3,})/.test(line)) {
           inFence = !inFence;
           continue;
         }
@@ -279,7 +977,7 @@ var require_study = __commonJS({
         const metadata = studyReadMetadata(lines, index);
         result.push({
           id: typeof metadata?.akebi?.id === "string" && /^[a-zA-Z0-9:_-]{1,128}$/.test(metadata.akebi.id) ? "akebi:" + metadata.akebi.id : file.path + "::" + studyNormalize(question),
-          legacyId: file.path + "::" + studyNormalize(question),
+          legacyId: file.path + "::" + studyNormalize(rawLine.match(/^\s*(.+?)\s+::/)?.[1]?.trim() || question),
           source: file.path,
           question,
           answer,
@@ -287,6 +985,8 @@ var require_study = __commonJS({
           explanation: typeof metadata?.explanation === "string" ? metadata.explanation : "",
           tips: typeof metadata?.tips === "string" ? metadata.tips : "",
           audio: Array.isArray(metadata?.audio) ? metadata.audio.filter((p) => typeof p === "string") : [],
+          images: Array.isArray(metadata?.images) ? metadata.images.slice() : [],
+          explicitTags: Array.isArray(metadata?.akebi?.tags) ? metadata.akebi.tags.filter((t) => typeof t === "string") : [],
           anki: metadata?.anki && typeof metadata.anki === "object" ? metadata.anki : null,
           vocab: metadata?.vocab && typeof metadata.vocab === "object" ? metadata.vocab : null,
           choiceAnswer: typeof metadata?.choiceAnswer === "string" ? metadata.choiceAnswer : "",
@@ -300,6 +1000,9 @@ var require_study = __commonJS({
           course,
           folder
         });
+        const card = result[result.length - 1];
+        card.tagPaths = cardPaths(card, tags.length ? tags : [tagPath(tag)]);
+        card.reviewKey = reviewKey(card);
       }
       return result;
     }
@@ -311,79 +1014,6 @@ var require_study = __commonJS({
         return { correct: spec.correct, options: studyShuffle(spec.choices) };
       }
       return null;
-    }
-    function studyCompactLegacy(raw) {
-      const particles = /* @__PURE__ */ new Set(["\u306F", "\u304C", "\u3092", "\u306B", "\u3078", "\u3067", "\u3068", "\u306E", "\u3084", "\u3082", "\u304B\u3089", "\u307E\u3067", "\u3067\u306F", "\u3068\u3057\u3066", "\u3002", "\u3001"]);
-      const compact = [];
-      for (const t of raw.tokens || []) {
-        if (particles.has(t) && compact.length) compact[compact.length - 1] += t;
-        else compact.push(t);
-      }
-      if (compact.length < 3) return null;
-      const prefix = compact.shift(), suffix = compact.pop();
-      while (compact.length > 11) {
-        let i = 0;
-        for (let j = 1; j < compact.length - 1; j++) if ((compact[j] + compact[j + 1]).length < (compact[i] + compact[i + 1]).length) i = j;
-        compact.splice(i, 2, compact[i] + compact[i + 1]);
-      }
-      return { schemaVersion: 2, prefix, suffix, tokens: compact, distractors: (raw.distractors || []).slice(0, 4), alternatives: [], concepts: raw.concepts || [], legacy: true };
-    }
-    function studySentenceSpec(card) {
-      let raw = card?.sentence;
-      if (!raw || typeof raw !== "object") return null;
-      if (raw.schemaVersion === 1) raw = studyCompactLegacy(raw);
-      if (!raw || raw.schemaVersion !== 2 || !Array.isArray(raw.tokens) || !Array.isArray(raw.distractors)) return null;
-      if (raw.tokens.length < 3 || raw.tokens.length > 12 || raw.tokens.length + raw.distractors.length > 15 || raw.distractors.length < 1) return null;
-      if (typeof raw.prefix !== "string" || typeof raw.suffix !== "string" || !raw.prefix || !raw.suffix) return null;
-      const all = [...raw.tokens, ...raw.distractors];
-      if (all.some((t) => typeof t !== "string" || !t.trim() || t.length > 70 || /[\r\n]/.test(t))) return null;
-      const norm = (t) => String(t).normalize("NFKC").replace(/\s+/g, "");
-      const canonical = raw.prefix + raw.tokens.join("") + raw.suffix;
-      if (norm(canonical) !== norm(card.answer)) return null;
-      const multiset = /* @__PURE__ */ new Map();
-      for (const t of all) multiset.set(t, (multiset.get(t) || 0) + 1);
-      const alternatives = [];
-      for (const a of raw.alternatives || []) {
-        if (!Array.isArray(a) || a.length < 1 || a.length > 12) continue;
-        const left = new Map(multiset);
-        let valid = true;
-        for (const t of a) {
-          if (!(left.get(t) > 0)) {
-            valid = false;
-            break;
-          }
-          left.set(t, left.get(t) - 1);
-        }
-        if (valid) alternatives.push(a.slice());
-      }
-      return {
-        prefix: raw.prefix,
-        suffix: raw.suffix,
-        tokens: raw.tokens.slice(),
-        distractors: raw.distractors.slice(),
-        alternatives,
-        concepts: Array.isArray(raw.concepts) ? raw.concepts.filter((x) => typeof x === "string") : [],
-        canonical,
-        maxLength: Math.max(raw.tokens.length, ...alternatives.map((a) => a.length)),
-        legacy: !!raw.legacy
-      };
-    }
-    function studySentenceAccepted(spec, selected) {
-      if (!spec || !Array.isArray(selected)) return false;
-      const norm = (t) => String(t).normalize("NFKC").replace(/\s+/g, "");
-      const selectedText = selected.map((t) => typeof t === "string" ? t : t?.text);
-      if (selectedText.some((t) => typeof t !== "string")) return false;
-      const counts = /* @__PURE__ */ new Map();
-      for (const t of [...spec.tokens, ...spec.distractors]) counts.set(t, (counts.get(t) || 0) + 1);
-      for (const t of selectedText) {
-        if (!(counts.get(t) > 0)) return false;
-        counts.set(t, counts.get(t) - 1);
-      }
-      const actual = norm(selectedText.join(""));
-      return [spec.tokens, ...spec.alternatives].some((a) => a.length === selectedText.length && norm(a.join("")) === actual);
-    }
-    function studySentenceBank(spec) {
-      return spec ? studyShuffle([...spec.tokens, ...spec.distractors]).map((text, i) => ({ id: "piece-" + i, text })) : [];
     }
     function studyShuffle(list) {
       const copy = [...list];
@@ -402,6 +1032,7 @@ var require_study = __commonJS({
         this.filtered = [];
         this.queue = [];
         this.current = null;
+        this.selectedDeck = oldSelection(this.owner.settings);
         this.selectedGenre = this.owner.settings.selectedStudyGenre || "\u3059\u3079\u3066";
         this.selectedStage = this.owner.settings.selectedStudyStage || "all";
         this.selectedCourse = this.owner.settings.selectedStudyCourse || null;
@@ -434,6 +1065,7 @@ var require_study = __commonJS({
         this._ticker = this.win.setInterval(() => this._tick(), 80);
       }
       onClose() {
+        this._cancelSentenceDrag?.();
         this._stopPronunciation?.();
         this._closed = true;
         void this.owner._flushMastery?.();
@@ -479,26 +1111,32 @@ var require_study = __commonJS({
         back.addEventListener("click", () => this._renderHome());
       }
       async _loadCards() {
-        const files = this.app.vault.getMarkdownFiles();
+        const files = this.app.vault.getMarkdownFiles().filter((f) => !excludedPath(f.path, this.owner.settings.excludedPaths || []));
         const collected = [];
+        const observedTags = /* @__PURE__ */ new Set();
         for (const file of files) {
           if (this._closed) return;
           const cache = this.app.metadataCache.getFileCache(file);
+          if (cache?.frontmatter?.akebi?.exclude === true) continue;
           const cachedTags = cache ? getAllTags(cache) || [] : null;
           if (cachedTags && !cachedTags.some((t) => t === "#flashcards" || t.startsWith("#flashcards/") || t === "#akebi" || t.startsWith("#akebi/"))) continue;
           const raw = await this.app.vault.cachedRead(file);
-          if (!raw.includes("#flashcards") && !raw.includes("#akebi")) continue;
-          const tag = studyTag(raw);
-          if (tag) collected.push(...studyCards(file, raw, tag));
+          const tags = studyTags(raw, cachedTags || []);
+          for (const tag of tags) {
+            const parts = tag.split("/");
+            for (let i = 1; i <= parts.length; i++) observedTags.add(parts.slice(0, i).join("/"));
+          }
+          if (tags.length) collected.push(...studyCards(file, raw, tags[0], tags));
         }
         this.invalidSentenceCount = collected.filter((c) => c.sentence && !studySentenceSpec(c)).length;
-        this.cards = [...new Map(collected.filter((card) => card.vocab?.quizEnabled !== false && (!card.sentence || studySentenceSpec(card))).map((card) => [card.id, card])).values()];
+        const found = dedupeCards(collected.filter((c) => c.vocab?.quizEnabled !== false && (!c.sentence || studySentenceSpec(c))));
+        this.cards = found.cards;
+        this.duplicateCount = found.duplicates;
         await this.owner.adoptCardIds(this.cards);
-        const firstStage = this.selectedVocabulary + "/Stage 01";
-        if (/^CEFR-J\/(A1|A2|B1|B2)$/.test(this.selectedVocabulary) && this.cards.some((c) => (c.vocab?.memberships || []).includes(firstStage))) {
-          this.selectedVocabulary = firstStage;
-          this._saveBrowserPreferences();
-        }
+        this._tree = makeTree(this.cards);
+        this._cardIndex = new Map(this.cards.map((c) => [c.id, c]));
+        while (this.selectedDeck && !this._tree.has(this.selectedDeck)) this.selectedDeck = this.selectedDeck.split("/").slice(0, -1).join("/");
+        this.owner._knownTagPaths = [.../* @__PURE__ */ new Set([...this._tree.keys(), ...observedTags])].filter(Boolean);
       }
       _level(card, nowMs = Date.now()) {
         const record = this.owner._mastery?.[card.id];
@@ -544,344 +1182,136 @@ var require_study = __commonJS({
         chart.createSpan({ cls: "sr-mastery-donut-count", text: String(total) });
         return chart;
       }
-      _genreList() {
-        return ["\u3059\u3079\u3066", ...new Set(this.cards.map((x) => x.genre))].sort(
-          (a, b) => a === "\u3059\u3079\u3066" ? -1 : b === "\u3059\u3079\u3066" ? 1 : a.localeCompare(b, "ja")
-        );
-      }
       _saveBrowserPreferences() {
-        const settings = this.owner.settings;
-        settings.selectedStudyStage = this.selectedStage;
-        settings.selectedStudyGenre = this.selectedGenre;
-        settings.selectedStudyCourse = this.selectedCourse || "";
-        settings.selectedStudyFolder = this.selectedFolder || "";
-        settings.selectedStudyVocabulary = this.selectedVocabulary || "";
-        settings.selectedStudyActivity = this.selectedActivity || "all";
-        settings.selectedStudyBrowseSubdecks = this.browseSubdecks;
-        void this.owner.saveData(settings);
+        this.owner.settings.selectedStudyStage = this.selectedStage;
+        this.owner.settings.selectedDeckTag = this.selectedDeck;
+        void this.owner.saveData(this.owner.settings);
       }
       _matchesDeck(card) {
-        if (this.selectedGenre !== "\u3059\u3079\u3066" && card.genre !== this.selectedGenre) return false;
-        if (this.selectedCourse && card.course !== this.selectedCourse) return false;
-        if (this.selectedFolder && card.folder !== this.selectedFolder) return false;
-        if (this.selectedVocabulary && !(card.vocab?.memberships || []).includes(this.selectedVocabulary)) return false;
-        if (this.selectedCourse && this.selectedGenre === "\u5927\u5B66\u4E00\u822C" && this.selectedActivity === "sentence" && !studySentenceSpec(card)) return false;
-        if (this.selectedCourse && this.selectedGenre === "\u5927\u5B66\u4E00\u822C" && this.selectedActivity === "word" && !!studySentenceSpec(card)) return false;
-        return true;
+        if (!this.selectedDeck) return false;
+        return (card.tagPaths || [tagPath(card.deck || card.genre || "general")]).some((p) => p === this.selectedDeck || p.startsWith(this.selectedDeck + "/"));
       }
-      _vocabularyLabel(id) {
-        const match = /^CEFR-J\/(A1|A2|B1|B2)\/Stage (\d+)$/.exec(id || "");
-        if (match) return "CEFR-J " + match[1] + " \xB7 Stage " + Number(match[2]);
-        const named = {
-          "CEFR-J/A1": "CEFR-J A1",
-          "CEFR-J/A2": "CEFR-J A2",
-          "CEFR-J/B1": "CEFR-J B1",
-          "CEFR-J/B2": "CEFR-J B2",
-          "NGSL/\u4E00\u822C\u57FA\u790E": "NGSL \u4E00\u822C\u57FA\u790E",
-          "NAWL/\u5B66\u8853": "NAWL \u5B66\u8853\u82F1\u8A9E",
-          "TSL/TOEIC": "TSL TOEIC",
-          "NGSL-GR/\u88DC\u52A9\u8A9E": "NGSL-GR \u88DC\u52A9\u8A9E"
-        };
-        return named[id] || (id.startsWith("NGSL-GR/") ? "NGSL-GR \u6BB5\u968E " + Number(id.split("/")[1]) : id);
+      _nodeCards(path, direct = false) {
+        const node = this._tree?.get(path);
+        if (!node) return [];
+        return [...direct ? node.direct : node.ids].map((id) => this._cardIndex.get(id)).filter(Boolean);
       }
-      _renderVocabularyBrowser(parent, cards) {
-        const panel = parent.createDiv({ cls: "sr-mastery-vocabulary-browser" });
-        const groups = [
-          ["CEFR-J\u306E\u30EC\u30D9\u30EB", ["CEFR-J/A1", "CEFR-J/A2", "CEFR-J/B1", "CEFR-J/B2"]],
-          ["\u76EE\u7684\u30FB\u4F7F\u7528\u983B\u5EA6", ["NGSL/\u4E00\u822C\u57FA\u790E", "NAWL/\u5B66\u8853", "TSL/TOEIC"]],
-          ["NGSL-GR\u306E\u6BB5\u968E", ["NGSL-GR/\u88DC\u52A9\u8A9E", ...Array.from({ length: 11 }, (_, i) => "NGSL-GR/" + String(i + 1).padStart(2, "0"))]]
-        ];
-        for (const [title, ids] of groups) {
-          if (!ids.some((id) => cards.some((c) => (c.vocab?.memberships || []).includes(id)))) continue;
-          const section = title.startsWith("NGSL-GR") ? panel.createEl("details", { cls: "sr-mastery-vocabulary-extra" }) : panel;
-          section.createEl(title.startsWith("NGSL-GR") ? "summary" : "h4", { text: title });
-          const row = section.createDiv({ cls: "sr-mastery-vocabulary-facets" });
-          for (const id of ids) {
-            const count = cards.filter((c) => (c.vocab?.memberships || []).includes(id)).length;
-            if (!count) continue;
-            const btn = row.createEl("button", { text: this._vocabularyLabel(id) + " \xB7 " + count + "\u554F", cls: "sr-mastery-vocabulary-filter" });
-            btn.setAttribute("data-vocabulary", id);
-            btn.setAttribute("aria-pressed", String(this.selectedVocabulary === id));
-            btn.classList.toggle("is-selected", this.selectedVocabulary === id);
-            btn.addEventListener("click", () => {
-              const firstStage = id + "/Stage 01";
-              this.selectedVocabulary = title === "CEFR-J\u306E\u30EC\u30D9\u30EB" && cards.some((c) => (c.vocab?.memberships || []).includes(firstStage)) ? firstStage : id;
-              this.selectedCourse = null;
-              this.selectedFolder = null;
-              this._saveBrowserPreferences();
-              this._renderHome();
-            });
-          }
-          if (title === "CEFR-J\u306E\u30EC\u30D9\u30EB") {
-            const selected = /^CEFR-J\/(A1|A2|B1|B2)(?:\/Stage \d+)?$/.exec(this.selectedVocabulary || "");
-            if (selected) {
-              const parentTag = "CEFR-J/" + selected[1];
-              const stages = [...new Set(cards.flatMap((c) => c.vocab?.memberships || []).filter((tag) => tag.startsWith(parentTag + "/Stage ")))].sort((a, b) => Number(a.split("Stage ")[1]) - Number(b.split("Stage ")[1]));
-              if (stages.length) {
-                const stageHeader = panel.createEl("h4", {
-                  text: "CEFR-J " + selected[1] + " \u2014 Stage\u5225\uFF08\u7D04230\u301C250\u554F\uFF09"
-                });
-                const stageGrid = panel.createDiv({
-                  cls: "sr-mastery-vocabulary-facets sr-mastery-vocabulary-stages"
-                });
-                for (const stageId of stages) {
-                  const scoped = cards.filter((c) => (c.vocab?.memberships || []).includes(stageId));
-                  const stageNumber = Number(stageId.split("Stage ")[1]);
-                  const button = stageGrid.createEl("button", {
-                    text: "Stage " + stageNumber + " \xB7 " + scoped.length + "\u554F",
-                    cls: "sr-mastery-vocabulary-filter sr-mastery-vocabulary-stage"
-                  });
-                  button.setAttribute("data-vocabulary", stageId);
-                  button.setAttribute("aria-pressed", String(this.selectedVocabulary === stageId));
-                  button.classList.toggle("is-selected", this.selectedVocabulary === stageId);
-                  button.addEventListener("click", () => {
-                    this.selectedVocabulary = stageId;
-                    this.selectedCourse = null;
-                    this.selectedFolder = null;
-                    this._saveBrowserPreferences();
-                    this._renderHome();
-                  });
-                }
-              }
-            }
-          }
-        }
-        panel.createEl("p", { cls: "sr-mastery-caption", text: "CEFR-J\u306FStage\u3054\u3068\u7D04230\u301C250\u554F\u3002\u76EE\u7684\u5225\u30FB\u6BB5\u968E\u5225\u306F\u540C\u3058\u30AB\u30FC\u30C9\u306E\u5225\u5206\u985E\u306A\u306E\u3067Ease\u3092\u5171\u6709\u3057\u307E\u3059\u3002" });
+      _goDeck(path) {
+        if (!this._tree?.has(path)) return;
+        this.selectedDeck = path;
+        this._saveBrowserPreferences();
+        this._renderHome();
+        this.main.scrollTop = 0;
       }
-      _renderSubdeckBrowser(parent) {
-        const container = parent.createDiv({ cls: "sr-mastery-subdeck-browser" });
-        const back = container.createEl("button", {
-          text: "\u2039 \u30B8\u30E3\u30F3\u30EB\u306B\u623B\u308B",
-          cls: "sr-mastery-subdeck-back"
-        });
-        back.addEventListener("click", () => {
-          this.selectedVocabulary = "";
-          this.browseSubdecks = false;
-          this.selectedVocabulary = "";
-          this.selectedCourse = null;
-          this.selectedFolder = null;
-          this._saveBrowserPreferences();
-          this._renderHome();
-        });
-        container.createEl("h3", { text: this.selectedGenre === "\u3059\u3079\u3066" ? "\u30D5\u30A9\u30EB\u30C0\u5225" : this.selectedGenre + (this.selectedGenre === "\u82F1\u5358\u8A9E" ? " \u203A \u30EC\u30D9\u30EB\u30FB\u76EE\u7684\u5225" : " \u203A \u6388\u696D\u30FB\u30D5\u30A9\u30EB\u30C0\u5225") });
-        const scoped = this.cards.filter((c) => this.selectedGenre === "\u3059\u3079\u3066" || c.genre === this.selectedGenre);
-        const all = container.createEl("button", {
-          text: "\u3053\u306E\u30B8\u30E3\u30F3\u30EB\u306E\u5168\u3066 \xB7 " + scoped.length + "\u554F",
-          cls: "sr-mastery-subdeck-all"
-        });
-        all.classList.toggle("is-selected", !this.selectedCourse && !this.selectedFolder && !this.selectedVocabulary);
-        all.addEventListener("click", () => {
-          this.selectedCourse = null;
-          this.selectedFolder = null;
-          this._saveBrowserPreferences();
-          this._renderHome();
-        });
-        if (this.selectedGenre === "\u82F1\u5358\u8A9E") this._renderVocabularyBrowser(container, scoped);
-        const courses = [...new Set(scoped.map((c) => c.course).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja"));
-        if (courses.length) {
-          container.createEl("h4", { text: "\u6388\u696D\u3054\u3068\u306E\u30C7\u30C3\u30AD" });
-          const group = container.createDiv({ cls: "sr-mastery-subdeck-group" });
-          for (const course of courses) {
-            const count = scoped.filter((c) => c.course === course).length;
-            const button = group.createEl("button", {
-              text: course + " \xB7 " + count + "\u554F",
-              cls: "sr-mastery-subdeck-course"
-            });
-            button.classList.toggle("is-selected", this.selectedCourse === course);
-            button.setAttribute("aria-pressed", String(this.selectedCourse === course));
-            button.addEventListener("click", () => {
-              this.selectedVocabulary = "";
-              this.selectedCourse = course;
-              this.selectedFolder = null;
-              this.selectedActivity = "all";
-              this._saveBrowserPreferences();
-              this._renderHome();
-            });
-          }
-        }
-        if (this.selectedGenre === "\u5927\u5B66\u4E00\u822C" && this.selectedCourse) {
-          const courseCards = scoped.filter((c) => c.course === this.selectedCourse);
-          const relational = courseCards.filter((c) => studySentenceSpec(c));
-          if (relational.length) {
-            container.createEl("h4", { text: "\u5B66\u7FD2\u5185\u5BB9" });
-            const modes = container.createDiv({ cls: "sr-mastery-activity-filters" });
-            for (const [key, label, count] of [
-              ["all", "\u5168\u3066", courseCards.length],
-              ["word", "\u5358\u8A9E\u30FB\u7528\u8A9E", courseCards.length - relational.length],
-              ["sentence", "\u95A2\u4FC2\u6027\u30FB\u6587\u7D44\u307F\u7ACB\u3066", relational.length]
-            ]) {
-              const button = modes.createEl("button", {
-                text: label + " \xB7 " + count + "\u554F",
-                cls: "sr-mastery-activity-filter"
-              });
-              button.setAttribute("data-activity", key);
-              button.setAttribute("aria-pressed", String(this.selectedActivity === key));
-              button.classList.toggle("is-selected", this.selectedActivity === key);
-              button.addEventListener("click", () => {
-                this.selectedActivity = key;
-                this._saveBrowserPreferences();
-                this._renderHome();
-              });
-            }
-          }
-        }
-        const folders = [...new Set(scoped.map((c) => c.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja"));
-        if (folders.length) {
-          container.createEl("h4", { text: "\u4FDD\u5B58\u30D5\u30A9\u30EB\u30C0\u3054\u3068\u306E\u30C7\u30C3\u30AD" });
-          const group = container.createDiv({ cls: "sr-mastery-subdeck-group" });
-          for (const folder of folders) {
-            const count = scoped.filter((c) => c.folder === folder).length;
-            const name = folder.split("/").pop() || folder;
-            const button = group.createEl("button", {
-              text: name + " \xB7 " + count + "\u554F",
-              cls: "sr-mastery-subdeck-folder"
-            });
-            button.setAttribute("title", folder);
-            button.classList.toggle("is-selected", this.selectedFolder === folder);
-            button.setAttribute("aria-pressed", String(this.selectedFolder === folder));
-            button.addEventListener("click", () => {
-              this.selectedVocabulary = "";
-              this.selectedFolder = folder;
-              this.selectedCourse = null;
-              this._saveBrowserPreferences();
-              this._renderHome();
-            });
-          }
-        }
+      _tagTitle(path) {
+        return tagLabel(path, this.owner.settings.tagLabels || {});
+      }
+      _scopeLabel() {
+        const parts = this.selectedDeck.split("/").filter(Boolean);
+        return parts.slice(-2).map((_, i) => this._tagTitle(parts.slice(0, Math.max(1, parts.length - 1) + i).join("/"))).join(" \u203A ");
       }
       _renderHome() {
+        this._cancelSentenceDrag?.();
         this.current = null;
         this._stopPronunciation();
-        if ((this.owner._masteryRevision ?? 0) > (this.owner._masterySavedRevision ?? 0)) {
-          void this.owner._flushMastery?.();
-        }
         this._stopCelebration();
-        this.modalEl.classList.remove("sr-mastery-timeout-mode");
+        void this.owner._flushMastery?.();
         this.screen = "home";
+        this.modalEl.classList.remove("sr-mastery-timeout-mode");
         this.main.replaceChildren();
-        const lead = this.main.createEl("p", { text: "\u65E2\u306B\u7B54\u3048\u305F\u554F\u984C\u3082\u542B\u3081\u3001\u3044\u3064\u3067\u3082\u7DF4\u7FD2\u3067\u304D\u307E\u3059\u3002", cls: "sr-mastery-caption" });
-        if (this.invalidSentenceCount) this.main.createEl("p", { text: this.invalidSentenceCount + "\u554F\u306E\u6587\u7D44\u307F\u7ACB\u3066\u3092\u51FA\u984C\u4FDD\u7559\u3057\u3066\u3044\u307E\u3059\u3002\u6B63\u7B54\u3068\u30D5\u30EC\u30FC\u30BA\u69CB\u6210\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002", cls: "sr-mastery-caption" });
-        if (this.browseSubdecks) {
-          this._renderSubdeckBrowser(this.main);
-        } else {
-          const categories = this.main.createDiv({ cls: "sr-mastery-categories" });
-          for (const genre of this._genreList()) {
-            const genreCards = this.cards.filter((c) => genre === "\u3059\u3079\u3066" || c.genre === genre);
-            const genreStats = this._stats(genreCards);
-            const button = categories.createEl("button", { cls: "sr-mastery-category" });
-            this._renderDonut(button, genreStats, true);
-            const caption = button.createDiv({ cls: "sr-mastery-category-info" });
-            caption.createSpan({
-              text: ["\u5927\u5B66\u4E00\u822C", "\u82F1\u5358\u8A9E"].includes(genre) ? genre + " \u203A" : genre,
-              cls: "sr-mastery-category-name"
-            });
-            caption.createSpan({ text: genreCards.length + "\u554F", cls: "sr-mastery-caption" });
-            if (genre === "\u5927\u5B66\u4E00\u822C") {
-              button.setAttribute("aria-label", "\u5927\u5B66\u4E00\u822C\u3092\u6388\u696D\u5225\u30FB\u30D5\u30A9\u30EB\u30C0\u5225\u306B\u958B\u304F");
-            }
-            if (genre === this.selectedGenre) button.classList.add("is-selected");
-            button.setAttribute("aria-pressed", String(genre === this.selectedGenre));
-            button.addEventListener("click", () => {
-              this.selectedVocabulary = "";
-              this.selectedGenre = genre;
-              this.selectedCourse = null;
-              this.selectedFolder = null;
-              this.browseSubdecks = ["\u5927\u5B66\u4E00\u822C", "\u82F1\u5358\u8A9E"].includes(genre);
-              this._saveBrowserPreferences();
-              this._renderHome();
-            });
-          }
-          const folders = this.main.createEl("button", {
-            text: "\u4FDD\u5B58\u30D5\u30A9\u30EB\u30C0\u304B\u3089\u9078\u3076 \u203A",
-            cls: "sr-mastery-folder-drill"
-          });
-          folders.addEventListener("click", () => {
-            this.selectedVocabulary = "";
-            this.selectedGenre = "\u3059\u3079\u3066";
-            this.selectedCourse = null;
-            this.selectedFolder = null;
-            this.browseSubdecks = true;
-            this._saveBrowserPreferences();
-            this._renderHome();
-          });
+        if (!this._tree) {
+          this._tree = makeTree(this.cards);
+          this._cardIndex = new Map(this.cards.map((c) => [c.id, c]));
         }
-        const cards = this.cards.filter((c) => this._matchesDeck(c));
+        if (!this._tree.has(this.selectedDeck)) this.selectedDeck = "";
+        const crumb = this.main.createDiv({ cls: "akebi-breadcrumb" });
+        const root = crumb.createEl("button", { text: "\u30C7\u30C3\u30AD" });
+        root.addEventListener("click", () => this._goDeck(""));
+        const parts = this.selectedDeck.split("/").filter(Boolean);
+        for (let i = 0; i < parts.length; i++) {
+          crumb.createSpan({ text: "\u203A", cls: "akebi-crumb-separator" });
+          const path = parts.slice(0, i + 1).join("/");
+          const b = crumb.createEl("button", { cls: "akebi-crumb-node" });
+          this._renderDonut(b, this._stats(this._nodeCards(path)), true);
+          b.createSpan({ text: this._tagTitle(path) });
+          b.addEventListener("click", () => this._goDeck(path));
+        }
+        if (this.invalidSentenceCount) this.main.createEl("p", { text: this.invalidSentenceCount + "\u554F\u306E\u6587\u7D44\u307F\u7ACB\u3066\u3092\u4FDD\u7559\u4E2D\u3002\u8A2D\u5B9A\u306E\u691C\u67FB\u304B\u3089\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002", cls: "sr-mastery-caption" });
+        const node = this._tree.get(this.selectedDeck);
+        const children = [...node.children].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+        if (children.length) {
+          const grid = this.main.createDiv({ cls: "akebi-deck-tree" });
+          for (const path of children) {
+            const cards2 = this._nodeCards(path);
+            const button = grid.createEl("button", { cls: "akebi-deck-node" });
+            button.setAttribute("data-deck", path);
+            this._renderDonut(button, this._stats(cards2), true);
+            const text = button.createDiv({ cls: "akebi-deck-text" });
+            text.createSpan({ text: this._tagTitle(path), cls: "akebi-deck-name" });
+            text.createSpan({ text: cards2.length + "\u554F", cls: "sr-mastery-caption" });
+            button.createSpan({ text: "\u203A", cls: "akebi-deck-arrow" });
+            button.addEventListener("click", () => this._goDeck(path));
+          }
+          if (!node.direct.size || !this.selectedDeck) return;
+        }
+        if (!this.selectedDeck) {
+          this.main.createEl("p", { text: "\u30CE\u30FC\u30C8\u306B #flashcards/university/biology \u306E\u3088\u3046\u306A\u30BF\u30B0\u3092\u4ED8\u3051\u308B\u3068\u30C7\u30C3\u30AD\u304C\u73FE\u308C\u307E\u3059\u3002", cls: "sr-mastery-caption" });
+          return;
+        }
+        const cards = children.length ? this._nodeCards(this.selectedDeck, true) : this._nodeCards(this.selectedDeck);
         const stats = this._stats(cards);
         const overview = this.main.createDiv({ cls: "sr-mastery-overview" });
         this._renderDonut(overview, stats);
-        const overviewDetail = overview.createDiv({ cls: "sr-mastery-overview-detail" });
-        const scopeName = (this.selectedVocabulary ? this._vocabularyLabel(this.selectedVocabulary) : "") || this.selectedCourse || (this.selectedFolder ? this.selectedFolder.split("/").pop() : this.selectedGenre);
-        overviewDetail.createEl("strong", {
-          text: scopeName + " \xB7 " + cards.length + "\u554F"
-        });
-        overviewDetail.createEl("p", {
-          cls: "sr-mastery-caption",
-          text: "\u5B66\u7FD2\u6E08\u307F " + (cards.length - stats.unseen) + "\u554F"
-        });
-        const legend = overviewDetail.createDiv({ cls: "sr-mastery-legend" });
-        for (const stage of STUDY_LEVELS) {
+        const info = overview.createDiv({ cls: "sr-mastery-overview-detail" });
+        info.createEl("strong", { text: this._tagTitle(this.selectedDeck) + " \xB7 " + cards.length + "\u554F" });
+        const legend = info.createDiv({ cls: "sr-mastery-legend" });
+        for (const level of STUDY_LEVELS) {
           const item = legend.createSpan({ cls: "sr-mastery-legend-item" });
-          item.createSpan({ cls: "sr-mastery-legend-dot is-" + stage });
-          item.createSpan({ text: STUDY_LABELS[stage] + " " + stats[stage] });
+          item.createSpan({ cls: "sr-mastery-legend-dot is-" + level });
+          item.createSpan({ text: STUDY_LABELS[level] + " " + stats[level] });
         }
-        const due = cards.filter((card) => this._isDue(card));
+        const due = cards.filter((c) => this._isDue(c));
         if (due.length) {
-          const review = this.main.createEl("button", {
-            text: "\u5FA9\u7FD2\u63A8\u5968 " + due.length + "\u554F \u203A",
-            cls: "sr-mastery-due-start"
-          });
-          review.setAttribute("aria-label", "\u8A18\u61B6\u306E\u4E88\u6E2C\u671F\u9650\u304C\u6765\u305F\u30AB\u30FC\u30C9\u3092\u5FA9\u7FD2\u3059\u308B");
-          review.addEventListener("click", () => this._start(due, true));
-        } else {
-          const upcoming = cards.map((card) => studyMemoryState(this.owner._mastery?.[card.id])).filter((state) => state?.dueAt).sort((a, b) => a.dueAt.localeCompare(b.dueAt))[0];
-          if (upcoming) {
-            const date = new Date(upcoming.dueAt);
-            this.main.createEl("p", {
-              cls: "sr-mastery-caption sr-mastery-upcoming",
-              text: "\u6B21\u56DE\u306E\u5FA9\u7FD2\u76EE\u5B89\uFF1A" + date.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })
-            });
-          }
+          const b = this.main.createEl("button", { text: "\u5FA9\u7FD2\u63A8\u5968 " + due.length + "\u554F \u203A", cls: "sr-mastery-due-start" });
+          b.addEventListener("click", () => this._start(due, true));
         }
-        const statRow = this.main.createDiv({ cls: "sr-mastery-stats" });
-        const stages = ["unseen", "weak", "known", "all", "perfect"];
-        for (const stage of stages) {
-          const amount = stage === "all" ? cards.length : stats[stage];
-          const button = statRow.createEl("button");
-          button.type = "button";
-          button.className = "sr-mastery-stat";
-          const name = stage === "all" ? "\u5168\u3066" : STUDY_LABELS[stage];
-          button.textContent = name + " " + amount;
-          button.classList.toggle("is-selected", this.selectedStage === stage);
-          button.addEventListener("click", () => {
-            this.selectedStage = stage;
+        const stages = this.main.createDiv({ cls: "sr-mastery-stats" });
+        for (const level of ["unseen", "weak", "known", "all", "perfect"]) {
+          const b = stages.createEl("button", { text: (level === "all" ? "\u5168\u3066" : STUDY_LABELS[level]) + " " + (level === "all" ? cards.length : stats[level]), cls: "sr-mastery-stat" });
+          b.classList.toggle("is-selected", this.selectedStage === level);
+          b.addEventListener("click", () => {
+            this.selectedStage = level;
             this._saveBrowserPreferences();
             this._renderHome();
           });
         }
         const start = this.main.createEl("button", { text: "\u5B66\u7FD2\u3092\u59CB\u3081\u308B", cls: "sr-mastery-start" });
-        start.disabled = cards.length === 0 || this.selectedStage !== "all" && stats[this.selectedStage] === 0;
+        start.disabled = !cards.length || this.selectedStage !== "all" && !stats[this.selectedStage];
         start.addEventListener("click", () => this._start(cards));
-        if (cards.length === 0) {
-          this.main.createEl("p", { text: "\u3053\u306E\u30B8\u30E3\u30F3\u30EB\u306B\u30AB\u30FC\u30C9\u306F\u3042\u308A\u307E\u305B\u3093\u3002#flashcards/\u30B8\u30E3\u30F3\u30EB \u30BF\u30B0\u3092\u30CE\u30FC\u30C8\u306B\u4ED8\u3051\u3066\u304F\u3060\u3055\u3044\u3002", cls: "sr-mastery-caption" });
-        }
       }
       _selectionCards() {
-        return this.cards.filter((c) => this._matchesDeck(c) && (this.selectedStage === "all" || this._level(c) === this.selectedStage));
+        const node = this._tree?.get(this.selectedDeck);
+        const scoped = node ? this._nodeCards(this.selectedDeck, !!node.children.size) : this.cards.filter((c) => this._matchesDeck(c));
+        return scoped.filter((c) => this.selectedStage === "all" || this._level(c) === this.selectedStage);
       }
       _repeatSameSelection() {
         if (this.settingsOpen || !["rep-break", "done"].includes(this.screen)) return;
         const candidates = this._selectionCards();
         if (!candidates.length) return;
         void this.owner._flushMastery?.();
-        this._start(candidates);
+        this._start(candidates, false, true);
       }
-      _start(candidates, ignoreStage = false) {
+      _start(candidates, ignoreStage = false, continueReps = false) {
+        const previousNumber = this.rep?.number || 0;
+        this._cancelSentenceDrag?.();
+        this.current = null;
         const unique = new Map(candidates.filter(
           (c) => ignoreStage || this.selectedStage === "all" || this._level(c) === this.selectedStage
-        ).map((card) => [card.id, card]));
+        ).map((card) => [reviewKey(card), card]));
         this.queue = studyShuffle([...unique.values()]);
         this.deferredWeak = /* @__PURE__ */ new Map();
         this.repSeen = /* @__PURE__ */ new Set();
+        this.repGraded = /* @__PURE__ */ new Set();
         const reviewStamp = (card) => {
           const stamp = this.owner._mastery?.[card.id]?.lastReviewedAt;
           const date = stamp ? Date.parse(stamp) : NaN;
@@ -891,7 +1321,7 @@ var require_study = __commonJS({
         this.sessionStats = { attempted: 0, correct: 0 };
         this.repHistory = [];
         this.rep = {
-          number: 1,
+          number: continueReps ? previousNumber + 1 : 1,
           // The setting is a MAXIMUM, not a guaranteed ten-question batch.
           // When only 3 cards match the selected deck/stage, show 0/3.
           size: Math.min(this.owner.settings.repSize || 10, this.queue.length),
@@ -901,9 +1331,11 @@ var require_study = __commonJS({
         this._next();
       }
       _next() {
+        if (this.screen === "study" && this.current?.state === "front") return;
+        this._cancelSentenceDrag?.();
         this._stopPronunciation();
         this._token++;
-        while (this.queue.length && this.repSeen?.has(this.queue[0].id)) {
+        while (this.queue.length && this.repSeen?.has(reviewKey(this.queue[0]))) {
           this.queue.shift();
         }
         if (this.rep && this.rep.attempted > 0 && (this.rep.attempted >= this.rep.size || this.queue.length === 0)) {
@@ -932,7 +1364,7 @@ var require_study = __commonJS({
           return;
         }
         const card = this.queue.shift();
-        this.repSeen?.add(card.id);
+        this.repSeen?.add(reviewKey(card));
         const now = performance.now();
         this.screen = "study";
         this.current = {
@@ -952,6 +1384,8 @@ var require_study = __commonJS({
         if (this.current.sentence) {
           this.current.sentenceBank = studySentenceBank(this.current.sentence);
           this.current.sentenceSelected = [];
+          this.current.sentenceChunks = this.current.sentence.chunks.map(() => []);
+          this.current.activeChunk = 0;
           this.current.sentencePicked = null;
         }
         this._renderQuestion();
@@ -1006,7 +1440,7 @@ var require_study = __commonJS({
         });
         next.disabled = !hasPending && !remaining;
         next.addEventListener("click", () => {
-          if (this.settingsOpen || this.screen !== "rep-break") return;
+          if (this.settingsOpen || this.screen !== "rep-break" || this.rep?.number !== rep.number) return;
           if (!hasPending) {
             this._repeatSameSelection();
             return;
@@ -1016,10 +1450,11 @@ var require_study = __commonJS({
             this.queue = [...new Map([
               ...this.queue,
               ...studyShuffle([...this.deferredWeak.values()])
-            ].map((card) => [card.id, card])).values()];
+            ].map((card) => [reviewKey(card), card])).values()];
             this.deferredWeak.clear();
           }
           this.repSeen = /* @__PURE__ */ new Set();
+          this.repGraded = /* @__PURE__ */ new Set();
           this.rep = {
             number: rep.number + 1,
             size: Math.min(this.owner.settings.repSize || 10, this.queue.length),
@@ -1073,6 +1508,7 @@ var require_study = __commonJS({
       _pause(leaving = false) {
         if (!this.current) return;
         if (leaving) {
+          if (this.current.state === "front" && this._remaining() <= 0) this._reveal("timeout");
           this.current = null;
           return;
         }
@@ -1115,6 +1551,8 @@ var require_study = __commonJS({
           (this.owner.settings.sentenceLimitSeconds || 120) * 500
         );
         const quick = !!correct && q.revealReason !== "timeout" && q.responseMs <= (q.sentence ? sentenceEasyMs : this.owner.settings.easyThresholdSeconds * 1e3);
+        if (this.repGraded?.has(reviewKey(q.card))) return;
+        this.repGraded?.add(reviewKey(q.card));
         const old = this.owner._mastery?.[q.card.id] ?? { stage: q.card.studied ? "known" : "unseen" };
         const next = studyMasteryNext(old, correct, {
           reactionMs: q.responseMs,
@@ -1136,127 +1574,15 @@ var require_study = __commonJS({
           if (correct) this.rep.correct++;
         }
         if (!correct) {
-          this.deferredWeak.set(q.card.id, q.card);
+          this.deferredWeak.set(reviewKey(q.card), q.card);
         } else {
-          this.deferredWeak.delete(q.card.id);
+          this.deferredWeak.delete(reviewKey(q.card));
         }
         if (q.revealReason !== "timeout") this._playSound(correct ? "correct" : "wrong");
         if (q.revealReason === "timeout") {
           if (keepTimeoutFeedback) this._renderTimeoutOnly(q);
           else this._next();
         } else this._renderQuestion();
-      }
-      _sentenceCanEdit(q) {
-        if (!q || q !== this.current || q.state !== "front" || this.screen !== "study" || this.settingsOpen || this._inResumeGrace()) return false;
-        if (this._remaining() <= 0) {
-          this._reveal("timeout");
-          return false;
-        }
-        return true;
-      }
-      _sentencePlace(q, id) {
-        if (!this._sentenceCanEdit(q) || q.sentenceSelected.length >= q.sentence.maxLength || q.sentenceSelected.includes(id) || !q.sentenceBank.some((t) => t.id === id)) return;
-        q.sentenceSelected.push(id);
-        this._refreshSentence(q);
-      }
-      _sentencePick(q, index) {
-        if (!this._sentenceCanEdit(q) || index < 0 || index >= q.sentenceSelected.length) return;
-        q.sentenceSelected.splice(index, 1);
-        this._refreshSentence(q);
-      }
-      _sentenceSubmit(q) {
-        if (!this._sentenceCanEdit(q)) return;
-        const lengths = [q.sentence.tokens.length, ...q.sentence.alternatives.map((a) => a.length)];
-        if (!lengths.includes(q.sentenceSelected.length)) return;
-        const byId = new Map(q.sentenceBank.map((t) => [t.id, t]));
-        const chosen = q.sentenceSelected.map((id) => byId.get(id));
-        if (chosen.some((t) => !t) || new Set(q.sentenceSelected).size !== chosen.length) return;
-        const correct = studySentenceAccepted(q.sentence, chosen);
-        q.responseMs = this._elapsed();
-        q.state = "back";
-        q.revealReason = "sentence";
-        q.choice = q.sentence.prefix + chosen.map((t) => t.text).join("") + q.sentence.suffix;
-        this._rate(correct);
-      }
-      _refreshSentence(q) {
-        if (q !== this.current || !q.sentenceBoard) return;
-        q.sentenceBoard.replaceChildren();
-        if (!q.sentenceSelected.length) q.sentenceBoard.createSpan({ text: "\u3053\u3053\u306B\u6587\u3092\u7D44\u307F\u7ACB\u3066\u308B", cls: "akebi-placeholder" });
-        const byId = new Map(q.sentenceBank.map((t) => [t.id, t]));
-        q.sentenceSelected.forEach((id, i) => {
-          const chip = q.sentenceBoard.createEl("button", { text: byId.get(id).text, cls: "sr-sentence-chip sr-sentence-selected" });
-          chip.type = "button";
-          chip.setAttribute("aria-label", byId.get(id).text + "\u3092\u623B\u3059");
-          chip.addEventListener("click", () => this._sentencePick(q, i));
-        });
-        for (const [id, button] of q.bankButtons) {
-          const used = q.sentenceSelected.includes(id);
-          button.disabled = used || q.sentenceSelected.length >= q.sentence.maxLength;
-          button.classList.toggle("is-used", used);
-          button.setAttribute("aria-pressed", String(used));
-        }
-        const complete = [q.sentence.tokens.length, ...q.sentence.alternatives.map((a) => a.length)].includes(q.sentenceSelected.length);
-        q.checkButton.disabled = !complete;
-        q.undoButton.disabled = q.sentenceSelected.length === 0;
-        q.sentenceCounter.textContent = q.sentenceSelected.length + " / " + q.sentence.tokens.length + " \u30D5\u30EC\u30FC\u30BA";
-      }
-      _renderSentenceQuestion(q) {
-        if (!q || q !== this.current) return;
-        this.modalEl.classList.remove("sr-mastery-timeout-mode");
-        this.main.replaceChildren();
-        this.clockValue = null;
-        this.clockBar = null;
-        this.main.createEl("p", { text: (q.card.course || q.card.genre) + " \xB7 \u6587\u7D44\u307F\u7ACB\u3066", cls: "sr-mastery-caption" });
-        if (this.rep) this.main.createEl("p", { text: "Rep " + this.rep.number + " \xB7 " + this.rep.attempted + "/" + this.rep.size + " \u56DE\u7B54", cls: "sr-mastery-rep-progress" });
-        this.main.createEl("h3", { text: q.card.question, cls: "sr-sentence-question" });
-        if (q.state === "front") {
-          const clock = this.main.createDiv({ cls: "sr-mastery-clock" });
-          this.clockValue = clock.createSpan();
-          this.clockBar = clock.createDiv({ cls: "sr-mastery-clock-track" }).createDiv({ cls: "sr-mastery-clock-bar" });
-          const frame = this.main.createDiv({ cls: "akebi-sentence-frame" });
-          frame.createEl("p", { text: q.sentence.prefix, cls: "akebi-fixed-boundary" });
-          q.sentenceBoard = frame.createDiv({ cls: "sr-sentence-placed" });
-          q.sentenceBoard.setAttribute("aria-label", "\u7D44\u307F\u7ACB\u3066\u308B\u4E2D\u592E\u90E8\u5206");
-          frame.createEl("p", { text: q.sentence.suffix, cls: "akebi-fixed-boundary" });
-          q.sentenceCounter = this.main.createEl("p", { cls: "sr-sentence-counter" });
-          this.main.createEl("p", { text: "\u5019\u88DC\u3092\u9806\u756A\u306B\u9078\u3076\u3002\u4E0A\u306E\u30D5\u30EC\u30FC\u30BA\u3092\u30BF\u30C3\u30D7\u3059\u308B\u3068\u623B\u305B\u307E\u3059\u3002", cls: "sr-mastery-caption" });
-          const pool = this.main.createDiv({ cls: "sr-sentence-bank" });
-          pool.setAttribute("role", "group");
-          pool.setAttribute("aria-label", "\u5168\u3066\u306E\u5019\u88DC\u30D5\u30EC\u30FC\u30BA");
-          q.bankButtons = /* @__PURE__ */ new Map();
-          for (const tile of q.sentenceBank) {
-            const b = pool.createEl("button", { text: tile.text, cls: "sr-sentence-chip sr-sentence-bank-chip" });
-            b.type = "button";
-            b.setAttribute("data-piece", tile.id);
-            b.addEventListener("click", () => this._sentencePlace(q, tile.id));
-            q.bankButtons.set(tile.id, b);
-          }
-          const actions = this.main.createDiv({ cls: "sr-sentence-actions" });
-          q.undoButton = actions.createEl("button", { text: "\u4E00\u3064\u623B\u3059" });
-          q.undoButton.type = "button";
-          q.undoButton.addEventListener("click", () => this._sentencePick(q, q.sentenceSelected.length - 1));
-          q.checkButton = actions.createEl("button", { text: "\u7B54\u3048\u5408\u308F\u305B", cls: "mod-cta sr-sentence-check" });
-          q.checkButton.type = "button";
-          q.checkButton.addEventListener("click", () => this._sentenceSubmit(q));
-          this._refreshSentence(q);
-          this._tick();
-        } else {
-          const status = q.revealReason === "timeout" ? "\u6642\u9593\u5207\u308C \xB7 FAIL\u8A18\u9332\u6E08\u307F" : q.result?.correct ? "\u6B63\u89E3\uFF01" : "\u5F79\u5272\u30FB\u9806\u5E8F\u30FB\u5426\u5B9A\u3092\u78BA\u8A8D\u3057\u3088\u3046";
-          this.main.createEl("p", { text: status, cls: "sr-sentence-result-status" });
-          const byId = new Map(q.sentenceBank.map((t) => [t.id, t]));
-          if (q.sentenceSelected.length) {
-            this.main.createEl("p", { text: "\u7D44\u307F\u7ACB\u3066\u305F\u6587", cls: "sr-sentence-caption" });
-            this.main.createEl("p", { text: q.sentence.prefix + q.sentenceSelected.map((id) => byId.get(id)?.text || "").join("") + q.sentence.suffix, cls: "sr-sentence-attempt" });
-          }
-          this.main.createEl("p", { text: "\u6A21\u7BC4\u6587", cls: "sr-sentence-caption" });
-          this.main.createEl("p", { text: q.sentence.canonical, cls: "sr-sentence-canonical" });
-          if (q.card.explanation) this.main.createEl("p", { text: q.card.explanation, cls: "sr-mastery-explanation" });
-          if (q.card.tips) this.main.createEl("p", { text: q.card.tips, cls: "sr-mastery-tips" });
-          const next = this.main.createEl("button", { text: "\u6B21\u306E\u554F\u984C\u306B\u9032\u3080", cls: "sr-mastery-next" });
-          next.addEventListener("click", () => {
-            if (this.current === q && q.state === "graded" && !this.settingsOpen) this._next();
-          });
-        }
       }
       _renderTimeoutOnly(q) {
         if (q.sentence) {
@@ -1272,6 +1598,7 @@ var require_study = __commonJS({
         card.setAttribute("role", "group");
         card.setAttribute("aria-label", isChoiceTimeout ? "\u6642\u9593\u5207\u308C\u3002\u6B63\u7B54\u3068\u89E3\u8AAC\u3002\u6B21\u306E\u554F\u984C\u306B\u9032\u3080" : "\u6642\u9593\u5207\u308C\u3002\u6B63\u7B54\u3068\u89E3\u8AAC\u3002\u5DE6\u3078\u30B9\u30EF\u30A4\u30D7\u3057\u3066\u6B21\u3078");
         card.createEl("p", { text: q.card.question, cls: "sr-mastery-question" });
+        this._renderCardImages(card, q.card, q.state === "front" ? "question" : "answer");
         card.createEl("p", { text: "\u6B63\u7B54\uFF1A" + q.card.answer, cls: "sr-mastery-answer" });
         card.createEl("p", { text: "\u89E3\u8AAC", cls: "sr-mastery-explanation-title" });
         card.createEl("p", {
@@ -1357,6 +1684,7 @@ var require_study = __commonJS({
         card.setAttribute("role", "group");
         card.setAttribute("aria-label", "\u554F\u984C");
         card.createEl("p", { text: q.card.question, cls: "sr-mastery-question" });
+        this._renderCardImages(card, q.card, q.state === "front" ? "question" : "answer");
         if (q.card.audio?.length) {
           const pronunciation = card.createEl("button", { cls: "sr-mastery-pronunciation" });
           pronunciation.type = "button";
@@ -1597,6 +1925,7 @@ var require_study = __commonJS({
         });
       }
       _openSettings() {
+        this._cancelSentenceDrag?.();
         if (this.settingsOpen) return;
         this._pause();
         this._stopCelebration();
@@ -1608,13 +1937,29 @@ var require_study = __commonJS({
         const mode = layer.createDiv({ cls: "sr-mastery-setting-field" });
         mode.createEl("label", { text: "\u51FA\u984C\u5F62\u5F0F" });
         const selector = mode.createEl("select");
-        for (const [value, text] of [["choice", "4\u629E"], ["slide", "\u30B9\u30E9\u30A4\u30C9"]]) {
+        for (const [value2, text] of [["choice", "4\u629E"], ["slide", "\u30B9\u30E9\u30A4\u30C9"]]) {
           const opt = selector.createEl("option", { text });
-          opt.value = value;
+          opt.value = value2;
         }
         selector.value = this.owner.settings.studyMode;
         selector.addEventListener("change", () => this._setSetting("studyMode", selector.value));
         this._renderCardMetadataEditor(layer);
+        this._renderImageEditor(layer);
+        const tagNames = layer.createEl("button", { text: "\u30BF\u30B0\u968E\u5C64\u306E\u8868\u793A\u540D", cls: "akebi-tag-settings-button" });
+        tagNames.addEventListener("click", () => this.owner.openTagNames(this.cards));
+        const area = layer.createDiv({ cls: "sr-mastery-setting-field" });
+        area.createEl("label", { text: "\u6587\u7D44\u307F\u7ACB\u3066\u6B04\u306E\u56FA\u5B9A\u9AD8\u3055" });
+        const height = area.createEl("input");
+        height.type = "range";
+        height.min = "220";
+        height.max = "520";
+        height.step = "20";
+        height.value = this.owner.settings.sentenceAreaHeight || 320;
+        const value = area.createSpan({ text: height.value + " px" });
+        height.addEventListener("input", () => {
+          value.textContent = height.value + " px";
+          this._setSetting("sentenceAreaHeight", Number(height.value));
+        });
         const repField = layer.createDiv({ cls: "sr-mastery-setting-field" });
         repField.createEl("label", { text: "1 Rep\u3042\u305F\u308A\u306E\u554F\u984C\u6570" });
         const repInput = repField.createEl("input");
@@ -1625,18 +1970,18 @@ var require_study = __commonJS({
         repInput.value = String(this.owner.settings.repSize || 10);
         repInput.setAttribute("aria-label", "Rep\u3054\u3068\u306E\u56DE\u7B54\u56DE\u6570");
         repInput.addEventListener("change", () => {
-          const value = Math.max(1, Math.min(
+          const value2 = Math.max(1, Math.min(
             50,
             Math.round(Number(repInput.value) || 10)
           ));
-          repInput.value = String(value);
-          this._setSetting("repSize", value);
+          repInput.value = String(value2);
+          this._setSetting("repSize", value2);
           if (this.rep && this.screen === "study") {
             const currentIsPending = this.current?.state !== "graded" ? 1 : 0;
             const outstanding = this.rep.attempted + this.queue.length + currentIsPending;
             this.rep.size = Math.max(
               this.rep.attempted + currentIsPending,
-              Math.min(value, outstanding)
+              Math.min(value2, outstanding)
             );
           }
         });
@@ -1765,13 +2110,107 @@ var require_study = __commonJS({
         }
       }
     };
-    module2.exports = { AkebiStudyModal: AkebiStudyModal2, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceAccepted, studySentenceBank, studyMemoryState };
+    Object.assign(AkebiStudyModal2.prototype, require_phrase_ui(), require_media().mediaUI);
+    module2.exports = { AkebiStudyModal: AkebiStudyModal2, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, reviewKey, excludedPath, makeTree, tagLabel };
+  }
+});
+
+// src/dialogs.js
+var require_dialogs = __commonJS({
+  "src/dialogs.js"(exports2, module2) {
+    "use strict";
+    var { Modal, FuzzySuggestModal, Notice: Notice2 } = require("obsidian");
+    var { EXTENSIONS } = require_media();
+    var { tagLabel, defaultLabel } = require_taxonomy();
+    var ImagePicker = class extends FuzzySuggestModal {
+      constructor(app, done) {
+        super(app);
+        this.done = done;
+        this.setPlaceholder("Vault\u5185\u306E\u753B\u50CF\u3092\u9078\u3076");
+      }
+      getItems() {
+        return this.app.vault.getFiles().filter((f) => EXTENSIONS.has(f.extension?.toLowerCase()));
+      }
+      getItemText(file) {
+        return file.path;
+      }
+      onChooseItem(file) {
+        this.chosen = file;
+        this.done(file);
+      }
+      onClose() {
+        const win = this.contentEl.ownerDocument?.defaultView || globalThis;
+        win.setTimeout(() => {
+          if (!this.chosen) this.done(null);
+        }, 0);
+      }
+    };
+    var TagNamesModal2 = class extends Modal {
+      constructor(app, owner, paths) {
+        super(app);
+        this.owner = owner;
+        this.paths = [...new Set(paths)].filter(Boolean).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+      }
+      onOpen() {
+        this.modalEl.addClass("akebi-tag-settings");
+        const el = this.contentEl;
+        el.empty();
+        el.createEl("h2", { text: "\u30BF\u30B0\u968E\u5C64\u306E\u8868\u793A\u540D" });
+        el.createEl("p", { text: "\u30BF\u30B0\u306F\u82F1\u8A9E\u306E\u56FA\u5B9AID\u3001\u3053\u3053\u3067\u5165\u529B\u3059\u308B\u540D\u524D\u306F\u753B\u9762\u8868\u793A\u3060\u3051\u306B\u4F7F\u3044\u307E\u3059\u3002\u540D\u524D\u3092\u5909\u3048\u3066\u3082\u5B66\u7FD2\u5C65\u6B74\u306F\u5909\u308F\u308A\u307E\u305B\u3093\u3002" });
+        const search = el.createEl("input");
+        search.type = "search";
+        search.placeholder = "\u30BF\u30B0\u307E\u305F\u306F\u8868\u793A\u540D\u3092\u691C\u7D22";
+        search.setAttribute("aria-label", "\u30BF\u30B0\u3092\u691C\u7D22");
+        const list = el.createDiv({ cls: "akebi-tag-label-list" }), draft = { ...this.owner.settings.tagLabels || {} }, rows = [];
+        for (const path of this.paths) {
+          const row = list.createDiv({ cls: "akebi-tag-label-row" });
+          row.style.setProperty("--akebi-tag-depth", String(path.split("/").length - 1));
+          row.createEl("code", { text: "#flashcards/" + path });
+          const input = row.createEl("input");
+          input.type = "text";
+          input.value = tagLabel(path, draft);
+          input.placeholder = defaultLabel(path);
+          input.maxLength = 80;
+          input.setAttribute("aria-label", "#flashcards/" + path + "\u306E\u8868\u793A\u540D");
+          input.addEventListener("input", () => {
+            if (input.value.trim()) draft[path] = input.value.trim();
+            else delete draft[path];
+          });
+          rows.push({ row, path, input });
+        }
+        search.addEventListener("input", () => {
+          const term = search.value.toLowerCase();
+          for (const r of rows) r.row.hidden = !(r.path + " " + r.input.value).toLowerCase().includes(term);
+        });
+        const save = el.createEl("button", { text: "\u8868\u793A\u540D\u3092\u4FDD\u5B58", cls: "mod-cta" });
+        save.addEventListener("click", async () => {
+          try {
+            save.disabled = true;
+            this.owner.settings.tagLabels = draft;
+            await this.owner.saveData(this.owner.settings);
+            new Notice2("\u30BF\u30B0\u306E\u8868\u793A\u540D\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002");
+            this.close();
+          } catch (e) {
+            save.disabled = false;
+            new Notice2("\u8868\u793A\u540D\u3092\u4FDD\u5B58\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+          }
+        });
+      }
+      onClose() {
+        this.contentEl.empty();
+      }
+    };
+    function pickImage2(app) {
+      return new Promise((resolve) => new ImagePicker(app, resolve).open());
+    }
+    module2.exports = { TagNamesModal: TagNamesModal2, pickImage: pickImage2 };
   }
 });
 
 // src/main.js
 var { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require("obsidian");
 var { AkebiStudyModal } = require_study();
+var { TagNamesModal, pickImage } = require_dialogs();
 var DEFAULTS = Object.freeze({
   recallLimitSeconds: 10,
   easyThresholdSeconds: 2,
@@ -1780,6 +2219,10 @@ var DEFAULTS = Object.freeze({
   choiceMode: true,
   soundEnabled: true,
   soundVolume: 25,
+  sentenceAreaHeight: 320,
+  tagLabels: {},
+  excludedPaths: [],
+  selectedDeckTag: null,
   repSize: 10,
   selectedStudyStage: "all",
   selectedStudyGenre: "\u3059\u3079\u3066",
@@ -1798,6 +2241,9 @@ function settingsFrom(raw = {}) {
     easyThresholdSeconds: finite(raw.easyThresholdSeconds, 2, 0.5, 10),
     sentenceLimitSeconds: finite(raw.sentenceLimitSeconds, 120, 45, 300),
     repSize: Math.round(finite(raw.repSize, 10, 1, 50)),
+    sentenceAreaHeight: finite(raw.sentenceAreaHeight, 320, 220, 520),
+    tagLabels: raw.tagLabels && typeof raw.tagLabels === "object" && !Array.isArray(raw.tagLabels) ? raw.tagLabels : {},
+    excludedPaths: Array.isArray(raw.excludedPaths) ? raw.excludedPaths.filter((x) => typeof x === "string") : [],
     soundVolume: finite(raw.soundVolume, 25, 0, 100),
     studyMode: raw.studyMode === "slide" ? "slide" : "choice",
     selectedStudyStage: ["all", "unseen", "weak", "known", "perfect"].includes(raw.selectedStudyStage) ? raw.selectedStudyStage : "all",
@@ -1897,6 +2343,22 @@ var Akebi = class extends Plugin {
       this._openingStudy = false;
     }
   }
+  pickImage() {
+    return pickImage(this.app);
+  }
+  async openTagNames(cards) {
+    try {
+      if (!cards) {
+        const reader = new AkebiStudyModal(this.app, this);
+        await reader._loadCards();
+        cards = reader.cards;
+      }
+      const { makeTree } = require_taxonomy();
+      new TagNamesModal(this.app, this, [...makeTree(cards).keys(), ...this._knownTagPaths || []]).open();
+    } catch (error) {
+      new Notice("\u30BF\u30B0\u306E\u4E00\u89A7\u3092\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+    }
+  }
   async checkCards() {
     const modal = new AkebiStudyModal(this.app, this);
     try {
@@ -1932,9 +2394,12 @@ var Akebi = class extends Plugin {
   async adoptCardIds(cards) {
     let changed = false;
     for (const card of cards) {
-      if (card.id !== card.legacyId && this._mastery[card.legacyId]) {
-        this.aliases[card.legacyId] = card.id;
-        changed = true;
+      const priorIds = [card.legacyId, ...card.duplicateIds || []];
+      for (const id of priorIds) {
+        if (id && id !== card.id && this._mastery[id] && this.aliases[id] !== card.id) {
+          this.aliases[id] = card.id;
+          changed = true;
+        }
       }
     }
     if (changed) {
@@ -2012,6 +2477,7 @@ var AkebiSettings = class extends PluginSettingTab {
         b.setDisabled(false);
       }
     }));
+    new Setting(el).setName("\u30BF\u30B0\u968E\u5C64\u306E\u8868\u793A\u540D").setDesc("\u82F1\u8A9E\u306E\u30BF\u30B0\u968E\u5C64\u306B\u5927\u5B66\u30FB\u751F\u7269\u30FB\u5358\u8A9E\u306A\u3069\u306E\u8868\u793A\u540D\u3092\u4ED8\u3051\u307E\u3059\u3002").addButton((b) => b.setButtonText("\u4E00\u89A7\u3068\u7DE8\u96C6").onClick(() => this.plugin.openTagNames()));
     new Setting(el).setName("\u554F\u984C\u3092\u691C\u67FB").setDesc("\u4E0D\u6B63\u306A\u30E1\u30BF\u30C7\u30FC\u30BF\u3084\u518D\u69CB\u6210\u3067\u304D\u306A\u3044\u6587\u3092\u8ABF\u3079\u307E\u3059\u3002").addButton((b) => b.setButtonText("\u691C\u67FB").onClick(() => this.plugin.checkCards()));
     el.createEl("p", { text: "\u5B66\u7FD2\u6642\u9593\u30FB\u97F3\u30FBRep\u30FB\u51FA\u984C\u5F62\u5F0F\u306F\u5B66\u7FD2\u753B\u9762\u306E\u8A2D\u5B9A\u304B\u3089\u5909\u66F4\u3067\u304D\u307E\u3059\u3002\u5168\u51E6\u7406\u306FVault\u5185\u3067\u5B8C\u7D50\u3057\u3001\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u901A\u4FE1\u306F\u884C\u3044\u307E\u305B\u3093\u3002" });
   }

@@ -15,13 +15,17 @@ function harness(){
   ep.empty=function(){this.replaceChildren()};ep.addClass=function(...args){this.classList.add(...args)};
   class Modal{constructor(app){this.app=app;this.modalEl=w.document.body.createDiv({cls:'modal'});this.contentEl=this.modalEl.createDiv({cls:'modal-content'});}open(){this.onOpen();}close(){this.onClose();this.modalEl.remove();}}
   class Plugin{constructor(app){this.app=app;this.manifest={id:'akebi',version:'0.8.0',dir:'.obsidian/plugins/akebi'};}async loadData(){return this.data||{};}async saveData(x){this.data=x;}registerEvent(){}addCommand(){}addRibbonIcon(){}registerObsidianProtocolHandler(){}addSettingTab(){}}
-  const obsidian={Modal,Plugin,PluginSettingTab:class{},Setting:class{},Notice:class{},setIcon:(el,name)=>el.setAttribute('data-icon',name),normalizePath:p=>p.replace(/\/+/g,'/'),getAllTags:cache=>cache.tags?.map(x=>x.tag)||[]};
-  const engine={module:{exports:{}},require:id=>obsidian,console,Date,performance:{now:()=>clock},globalThis:w};
-  vm.runInNewContext(fs.readFileSync(path.join(ROOT,'src/study.js'),'utf8'),engine);
-  const api=engine.module.exports;
-  const host={module:{exports:{}},require:id=>id==='obsidian'?obsidian:api,console,Date};
-  vm.runInNewContext(fs.readFileSync(path.join(ROOT,'src/main.js'),'utf8'),host);
-  return {api,Plugin:host.module.exports,window:w,setTime:n=>clock=n,close:()=>w.close()};
+  const obsidian={Modal,FuzzySuggestModal:class extends Modal{setPlaceholder(){}},Plugin,PluginSettingTab:class{},Setting:class{},Notice:class{},setIcon:(el,name)=>el.setAttribute('data-icon',name),normalizePath:p=>p.replace(/\/+/g,'/'),getAllTags:cache=>cache.tags?.map(x=>x.tag)||[]};
+  const cache=new Map();
+  function load(name){
+    if(name==='obsidian')return obsidian;
+    const key=name.replace(/^\.\//,'');if(cache.has(key))return cache.get(key);
+    const context={module:{exports:{}},require:load,console,Date,performance:{now:()=>clock},globalThis:w};
+    vm.runInNewContext(fs.readFileSync(path.join(ROOT,'src',key+'.js'),'utf8'),context,{filename:key+'.js'});
+    cache.set(key,context.module.exports);return context.module.exports;
+  }
+  const api=load('./study');
+  return {api,Plugin:load('./main'),load,window:w,setTime:n=>clock=n,close:()=>w.close()};
 }
 const example={question:'輸送経路を組み立てる',answer:'タンパク質は粗面小胞体で合成され、ゴルジ体を経て分泌される。',id:'q',legacyId:'q',genre:'生物学',deck:'生物学',source:'cards.md',course:'生物学',dummies:[],explanation:'合成と輸送は別の過程。',sentence:{schemaVersion:2,prefix:'タンパク質は',suffix:'分泌される。',tokens:['粗面小胞体で','合成','され、','ゴルジ体を','経て'],distractors:['核小体で','分解','されず、'],alternatives:[]}};
 test('canonical reconstruction, negation, duplicate multiplicity and v1 compatibility',()=>{
@@ -33,7 +37,7 @@ test('canonical reconstruction, negation, duplicate multiplicity and v1 compatib
  const wrong={...example,answer:'違う文'};assert.equal(api.studySentenceSpec(wrong),null);
  const legacy={...example,sentence:{schemaVersion:1,tokens:['タンパク質','は','粗面小胞体','で','合成','され、','ゴルジ体','を','経て','分泌される。'],distractors:['核小体で','されず、']}};
  const old=api.studySentenceSpec(legacy);assert(old);assert.equal(old.canonical,example.answer);
- assert.equal(api.studyTag('#akebi/Science\n'),'Science');
+ assert.equal(api.studyTag('#akebi/Science\n'),'science');
  h.close();
 });
 test('real DOM: every candidate can be tapped, corrected and graded once; timeout persists before Next',async()=>{
@@ -45,7 +49,7 @@ test('real DOM: every candidate can be tapped, corrected and graded once; timeou
  assert.equal(modal.main.querySelectorAll('.akebi-fixed-boundary').length,2);
  const initialButtons=[...modal.main.querySelectorAll('.sr-sentence-bank-chip')];
  const choose=text=>{const btn=[...modal.main.querySelectorAll('.sr-sentence-bank-chip')].find(b=>b.textContent===text&&!b.disabled);assert(btn,text);btn.click();};
- choose('核小体で');modal.main.querySelector('.sr-sentence-selected').click();assert.equal(q.sentenceSelected.length,0);
+ choose('核小体で');modal.main.querySelector('.sr-sentence-selected').click();modal.main.querySelector('.sr-sentence-selected').click();assert.equal(q.sentenceSelected.length,0);
  for(const t of example.sentence.tokens)choose(t);
  assert(initialButtons.every(b=>b.isConnected),'bank must not be detached on each click');
  assert.equal(q.checkButton.disabled,false);q.checkButton.click();assert.equal(saves,1);assert.equal(owner._mastery.q.correct,1);
@@ -68,6 +72,11 @@ test('migration preserves old files/counters, newer records win, corrupt ledger 
  await plugin.adoptCardIds([{id:'akebi:stable',legacyId:'oldQ'}]);assert.equal(plugin._mastery['akebi:stable'].correct,5);
  assert(!plugin._mastery.oldQ);assert.equal(plugin.settings.idAliases.oldQ,'akebi:stable');
  const persisted=JSON.parse(store.get('.obsidian/plugins/akebi/mastery.json'));assert(!persisted.oldQ);assert.equal(persisted['akebi:stable'].attempts,6);
+ plugin._mastery.duplicateQ={...old.oldQ,attempts:7,correct:6,lastReviewedAt:'2026-01-02T00:00:00Z'};
+ await plugin.adoptCardIds([{id:'akebi:stable',legacyId:'oldQ',duplicateIds:['duplicateQ']}]);
+ assert.equal(plugin._mastery['akebi:stable'].attempts,7);assert(!plugin._mastery.duplicateQ);
+ assert.equal(plugin.settings.idAliases.duplicateQ,'akebi:stable');
+
  await assert.rejects(plugin.importLegacy());
  store.set('.obsidian/plugins/akebi/mastery.json','broken JSON');
  const broken=new h.Plugin(app);await broken.onload();assert(broken._loadError);await broken._saveMastery();assert.equal(store.get('.obsidian/plugins/akebi/mastery.json'),'broken JSON');
@@ -79,9 +88,67 @@ test('optional private fixture: all authored sentences are exactly reconstructib
  for(const c of cards){
   const answer=c.prefix+c.tokens.join('')+c.suffix;
   const spec=h.api.studySentenceSpec({sentence:c,answer});assert(spec,c.id);
-  assert(h.api.studySentenceAccepted(spec,spec.tokens),c.id);
+  assert(h.api.studySentenceAccepted(spec,spec.schemaVersion===3?spec.chunks.map(c=>c.tokens):spec.tokens),c.id);
+  if(spec.schemaVersion===3)assert(h.api.studySentenceAccepted(spec,spec.chunks.map(c=>[...c.tokens].reverse())),c.id+' reversed within chunks');
   assert(spec.tokens.length+spec.distractors.length<=15,c.id);
   for(const a of spec.alternatives)assert(h.api.studySentenceAccepted(spec,a),c.id);
  }
  h.close();
+});
+test('chunk grading ignores local word order but not role assignment, negation or multiplicity',()=>{
+ const h=harness(),a=h.api;
+ const raw={...example.sentence,schemaVersion:3,chunks:[
+   {id:'make',label:'合成',tokens:['粗面小胞体で','合成','され、'],mode:'bag'},
+   {id:'transport',label:'輸送',tokens:['ゴルジ体を','経て'],mode:'bag'}]};
+ const spec=a.studySentenceSpec({...example,sentence:raw});assert(spec);
+ assert(a.studySentenceAccepted(spec,[['され、','粗面小胞体で','合成'],['経て','ゴルジ体を']]));
+ assert(!a.studySentenceAccepted(spec,[['され、','ゴルジ体を','合成'],['経て','粗面小胞体で']]));
+ assert(!a.studySentenceAccepted(spec,[['粗面小胞体で','合成','されず、'],['ゴルジ体を','経て']]));
+ assert(!a.studySentenceAccepted(spec,[['粗面小胞体で','合成','合成'],['ゴルジ体を','経て']]));
+ h.close();
+});
+test('archive exclusion, same-content Rep deduplication, hierarchy labels and quote-compatible identities',async()=>{
+ const h=harness();const owner={manifest:{version:'0.8.1'},settings:{selectedStudyStage:'all',selectedDeckTag:'university/biology/sentences',repSize:10,recallLimitSeconds:5,sentenceLimitSeconds:120,soundEnabled:false},_mastery:{},_curated:{},_saveMastery(){},_flushMastery:async()=>true,saveData:async()=>{},adoptCardIds:async()=>{}};
+ const note='#flashcards/university/biology/sentences\n'+example.question+' :: '+example.answer+'\n%%AKEBI '+JSON.stringify({sentence:example.sentence,akebi:{id:'core'}})+'%%\n';
+ const linear='#flashcards/university/linear-algebra\n> 階数とは？ :: 行列の一次独立な列数\n';
+ const files=[{path:'biology.md'},{path:'70_ARCHIVE/quarantine/biology.md'},{path:'backup/biology.md'},{path:'linear.md'}];
+ const app={vault:{getMarkdownFiles:()=>files,cachedRead:async f=>f.path==='linear.md'?linear:note,getAbstractFileByPath:()=>null},metadataCache:{getFileCache:()=>null}};
+ const modal=new h.api.AkebiStudyModal(app,owner);await modal._loadCards();assert.equal(modal.cards.length,2);
+ assert(modal._tree.has('university/biology/sentences'));assert(modal._tree.has('university/linear-algebra'));
+ const math=modal.cards.find(c=>c.source==='linear.md');assert.equal(math.question,'階数とは？');assert(math.legacyId.includes('>'));
+ modal._renderShell();modal._goDeck('university');
+ assert.equal(modal.main.querySelectorAll('.akebi-deck-node').length,2);
+ assert.equal(modal.main.querySelector('.sr-mastery-start'),null);
+ assert(!modal.main.textContent.includes('保存フォルダ'));
+ owner.settings.tagLabels={'university':'大学','university/biology':'生物'};modal._renderHome();assert(modal.main.textContent.includes('生物'));
+ const first=modal.cards.find(c=>c.sentence),second={...first,id:'second',question:'別の問題',answer:example.answer,source:'second.md'};
+ const copy={...first,id:'old-id',source:'copy.md'};
+ modal._start([first,copy,second]);assert.equal(modal.rep.size,2);
+ const seen=[];
+ for(let i=0;i<2;i++){seen.push(modal.current.card.question);modal._rate(false);modal._next();}
+ assert.equal(new Set(seen).size,2);assert.equal(modal.screen,'rep-break');assert.equal(modal.rep.attempted,2);
+ modal.main.querySelector('.sr-mastery-start').click();assert.equal(modal.rep.number,2);assert.equal(modal.repSeen.size,1);
+ const tax=h.load('./taxonomy');assert(tax.excludedPath('70_ARCHIVE/quarantine/x.md'));assert(!tax.excludedPath('00_META/00_Inbox/linear.md'));
+ assert.deepEqual(Array.from(tax.studyTags('#flashcards/university/biology/terms\n',['#flashcards/一般'])),['university/biology/terms']);
+ assert.deepEqual(Array.from(tax.studyTags('---\ntags: [flashcards/university/linear-algebra]\n---\nQ :: A\n')),['university/linear-algebra']);
+ assert.deepEqual(Array.from(tax.studyTags('---\ntags:\n  - akebi/university/biology/terms\n---\nQ :: A\n')),['university/biology/terms']);
+ assert.notEqual(tax.reviewKey({question:'式',answer:'n!'}),tax.reviewKey({question:'式',answer:'n'}));
+
+ h.close();
+});
+test('local-image metadata, safe paths and tag-label editing preserve questions and history',async()=>{
+ const h=harness(),media=h.load('./media');
+ assert.equal(media.localImage('https://elsewhere/image.png'),null);assert.equal(media.localImage('../secret.png'),null);assert.equal(media.localImage('data:image/png;base64,x'),null);
+ assert.equal(media.localImage('images/図.png').path,'images/図.png');
+ const text='#flashcards/university/biology\nQ :: A\n<!--SR:!2026-12-01,3,230-->\n%%RMUX {"akebi":{"id":"fixed"},"dummies":["B","C","D"]}%%\n';
+ const edited=media.patchImages(text,{question:'Q'},[{path:'images/図.png',showOn:'answer'}]);
+ assert(edited.includes('Q :: A\n<!--SR:!2026-12-01,3,230-->'));
+ const obj=JSON.parse(edited.match(/%%RMUX (.*)%%/)[1]);assert.equal(obj.akebi.id,'fixed');assert.equal(obj.images[0].showOn,'answer');
+ const paths=['university','university/biology','university/biology/terms'];
+ const {TagNamesModal}=h.load('./dialogs');const owner={settings:{tagLabels:{}},saveData:async()=>{}};
+ const dialog=new TagNamesModal({},owner,paths);dialog.open();
+ const input=[...dialog.contentEl.querySelectorAll('input')].find(e=>e.getAttribute('aria-label')?.includes('/biologyの表示名'));
+ assert(input);input.value='細胞生物学';input.dispatchEvent(new h.window.Event('input'));
+ [...dialog.contentEl.querySelectorAll('button')].find(b=>b.textContent==='表示名を保存').click();await new Promise(r=>setImmediate(r));
+ assert.equal(owner.settings.tagLabels['university/biology'],'細胞生物学');h.close();
 });

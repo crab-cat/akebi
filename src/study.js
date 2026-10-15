@@ -1,4 +1,6 @@
 const { Modal, Notice, setIcon, getAllTags } = require('obsidian');
+const { tagPath, studyTags, cardPaths, tagLabel, excludedPath, reviewKey, dedupeCards, makeTree, oldSelection } = require('./taxonomy');
+const { studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank } = require('./sentence');
 // Akebi learning engine. Locally parsed Markdown; no upstream plugin dependency.
 const STUDY_LEVELS = ["unseen", "weak", "known", "perfect"];
 const STUDY_LABELS = {
@@ -266,13 +268,8 @@ function studyNormalize(value) {
     .normalize("NFKC").replace(/\s+/g, "")
     .replace(/[?？!！。:：]/g, "").trim();
 }
-function studyTag(text) {
-  // Explicit flashcard deck hierarchy. Skip comments and code fences.
-  const cleaned = String(text).replace(/<!--[\s\S]*?-->/g, "").replace(/%%[\s\S]*?%%/g, "");
-  const match = cleaned.match(/(?:^|\s)#(?:flashcards|akebi)(?:\/([^\s#\]]+))?(?=\s|$)/m);
-  if (!match) return null;
-  return match[1] || "一般";
-}
+function studyTag(text) { return studyTags(text)[0] || null; }
+
 // Card-local multiple-choice metadata. Stored in a hidden Obsidian comment
 // immediately after the card and its optional native SR schedule comment.
 const STUDY_MC_PREFIX = "%%RMUX ";
@@ -281,8 +278,9 @@ const STUDY_SR_PATTERN = /^\s*<!--SR:[^>]*-->\s*$/;
 
 function studyReadMetadata(lines, cardLine) {
   let offset = cardLine + 1;
-  if (STUDY_SR_PATTERN.test(lines[offset] || "")) offset++;
-  const match = STUDY_MC_PATTERN.exec(lines[offset] || "");
+  const clean=line=>String(line||" ").replace(/^\s*(?:>\s*)+/,"");
+  if (STUDY_SR_PATTERN.test(clean(lines[offset]))) offset++;
+  const match = STUDY_MC_PATTERN.exec(clean(lines[offset]));
   if (!match) return null;
   try {
     const item = JSON.parse(match[1]);
@@ -310,7 +308,7 @@ function studyUpdateNoteMetadata(markdown, question, dummies, explanation, choic
     const line = lines[i];
     if (!line.includes(" :: ") || line.trim().startsWith("%%") ||
         line.trim().startsWith("<!--")) continue;
-    const head = line.split(" :: ")[0].trim();
+    const head = line.split(" :: ")[0].replace(/^\s*(?:>\s*)+/,"").trim();
     if (studyNormalize(head) === normalized) matches.push(i);
   }
   if (matches.length !== 1) throw new Error("同じ問題が見つからないか、重複しています");
@@ -348,15 +346,18 @@ function studyCourseFromNote(markdown, file, tag) {
   return null;
 }
 
-function studyCards(file, markdown, tag) {
+function studyCards(file, markdown, tag, declaredTags = null) {
+  const tags=declaredTags || studyTags(markdown);
+  tag=tag || tags[0] || "general";
   const result = [];
   let inFence = false;
   const course = studyCourseFromNote(markdown, file, tag);
   const folder = (file.path || "").split("/").slice(0, -1).join("/");
   const lines = markdown.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    if (/^\s*`{3,}/.test(line)) { inFence = !inFence; continue; }
+    const rawLine=lines[index];
+    const line = rawLine.replace(/^\s*(?:>\s*)+/,"");
+    if (/^\s*(?:`{3,}|~{3,})/.test(line)) { inFence = !inFence; continue; }
     if (inFence || line.trim().startsWith("<!--") || line.trim().startsWith("%%")) continue;
     const match = line.match(/^\s*(?![-#|])(.+?)\s+::\s+(.+?)\s*(?:<!--SR:.*?-->)?\s*$/);
     if (!match) continue;
@@ -367,7 +368,7 @@ function studyCards(file, markdown, tag) {
     result.push({
       id: typeof metadata?.akebi?.id === "string" && /^[a-zA-Z0-9:_-]{1,128}$/.test(metadata.akebi.id)
         ? "akebi:" + metadata.akebi.id : file.path + "::" + studyNormalize(question),
-      legacyId: file.path + "::" + studyNormalize(question),
+      legacyId: file.path + "::" + studyNormalize(rawLine.match(/^\s*(.+?)\s+::/)?.[1]?.trim() || question),
       source: file.path,
       question,
       answer,
@@ -375,6 +376,8 @@ function studyCards(file, markdown, tag) {
       explanation: typeof metadata?.explanation === "string" ? metadata.explanation : "",
       tips: typeof metadata?.tips === "string" ? metadata.tips : "",
       audio: Array.isArray(metadata?.audio) ? metadata.audio.filter(p => typeof p === "string") : [],
+      images: Array.isArray(metadata?.images) ? metadata.images.slice() : [],
+      explicitTags: Array.isArray(metadata?.akebi?.tags) ? metadata.akebi.tags.filter(t=>typeof t==='string') : [],
       anki: metadata?.anki && typeof metadata.anki === "object" ? metadata.anki : null,
       vocab: metadata?.vocab && typeof metadata.vocab === "object" ? metadata.vocab : null,
       choiceAnswer: typeof metadata?.choiceAnswer === "string" ? metadata.choiceAnswer : "",
@@ -389,6 +392,9 @@ function studyCards(file, markdown, tag) {
       course,
       folder
     });
+    const card=result[result.length-1];
+    card.tagPaths=cardPaths(card,tags.length ? tags : [tagPath(tag)]);
+    card.reviewKey=reviewKey(card);
   }
   return result;
 }
@@ -414,63 +420,7 @@ function studyOptions(card, peers, curated) {
 
 // Sentence puzzles use curated Japanese word/particle tiles to preserve
 // technical terms. Alternatives are explicit, never guessed by a parser.
-function studyCompactLegacy(raw) {
-  const particles=new Set(["は","が","を","に","へ","で","と","の","や","も","から","まで","では","として","。","、"]);
-  const compact=[];
-  for(const t of raw.tokens || []) {
-    if(particles.has(t) && compact.length) compact[compact.length-1]+=t;
-    else compact.push(t);
-  }
-  if(compact.length<3) return null;
-  const prefix=compact.shift(), suffix=compact.pop();
-  // Preserve exact text while grouping adjacent phrase units; no semantic guesses.
-  while(compact.length>11) {
-    let i=0;
-    for(let j=1;j<compact.length-1;j++) if((compact[j]+compact[j+1]).length<(compact[i]+compact[i+1]).length)i=j;
-    compact.splice(i,2,compact[i]+compact[i+1]);
-  }
-  return {schemaVersion:2,prefix,suffix,tokens:compact,distractors:(raw.distractors||[]).slice(0,4),alternatives:[],concepts:raw.concepts||[],legacy:true};
-}
-function studySentenceSpec(card) {
-  let raw=card?.sentence;
-  if(!raw || typeof raw!=="object")return null;
-  if(raw.schemaVersion===1)raw=studyCompactLegacy(raw);
-  if(!raw || raw.schemaVersion!==2 || !Array.isArray(raw.tokens) || !Array.isArray(raw.distractors))return null;
-  if(raw.tokens.length<3 || raw.tokens.length>12 || raw.tokens.length+raw.distractors.length>15 || raw.distractors.length<1)return null;
-  if(typeof raw.prefix!=="string" || typeof raw.suffix!=="string" || !raw.prefix || !raw.suffix)return null;
-  const all=[...raw.tokens,...raw.distractors];
-  if(all.some(t=>typeof t!=="string" || !t.trim() || t.length>70 || /[\r\n]/.test(t)))return null;
-  const norm=t=>String(t).normalize('NFKC').replace(/\s+/g,'');
-  const canonical=raw.prefix+raw.tokens.join('')+raw.suffix;
-  if(norm(canonical)!==norm(card.answer))return null;
-  const multiset=new Map();
-  for(const t of all)multiset.set(t,(multiset.get(t)||0)+1);
-  const alternatives=[];
-  for(const a of raw.alternatives||[]){
-    if(!Array.isArray(a) || a.length<1 || a.length>12)continue;
-    const left=new Map(multiset);let valid=true;
-    for(const t of a){if(!(left.get(t)>0)){valid=false;break;}left.set(t,left.get(t)-1);}
-    if(valid)alternatives.push(a.slice());
-  }
-  return {prefix:raw.prefix,suffix:raw.suffix,tokens:raw.tokens.slice(),distractors:raw.distractors.slice(),alternatives,
-    concepts:Array.isArray(raw.concepts)?raw.concepts.filter(x=>typeof x==='string'):[],canonical,
-    maxLength:Math.max(raw.tokens.length,...alternatives.map(a=>a.length)),legacy:!!raw.legacy};
-}
-function studySentenceAccepted(spec, selected) {
-  if(!spec || !Array.isArray(selected))return false;
-  const norm=t=>String(t).normalize('NFKC').replace(/\s+/g,'');
-  const selectedText=selected.map(t=>typeof t==='string'?t:t?.text);
-  if(selectedText.some(t=>typeof t!=='string'))return false;
-  // Also enforce tile multiplicity; neither duplicate reuse nor a missing tile is valid.
-  const counts=new Map();
-  for(const t of [...spec.tokens,...spec.distractors])counts.set(t,(counts.get(t)||0)+1);
-  for(const t of selectedText){if(!(counts.get(t)>0))return false;counts.set(t,counts.get(t)-1);}
-  const actual=norm(selectedText.join(''));
-  return [spec.tokens,...spec.alternatives].some(a=>a.length===selectedText.length && norm(a.join(''))===actual);
-}
-function studySentenceBank(spec) {
-  return spec ? studyShuffle([...spec.tokens,...spec.distractors]).map((text,i)=>({id:'piece-'+i,text})) : [];
-}
+
 function studyShuffle(list) {
   const copy=[...list];
   for(let i=copy.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]];}
@@ -487,6 +437,7 @@ class AkebiStudyModal extends Modal {
     this.filtered = [];
     this.queue = [];
     this.current = null;
+    this.selectedDeck = oldSelection(this.owner.settings);
     this.selectedGenre = this.owner.settings.selectedStudyGenre || "すべて";
     this.selectedStage = this.owner.settings.selectedStudyStage || "all";
     this.selectedCourse = this.owner.settings.selectedStudyCourse || null;
@@ -522,6 +473,7 @@ class AkebiStudyModal extends Modal {
   }
 
   onClose() {
+    this._cancelSentenceDrag?.();
     this._stopPronunciation?.();
     this._closed = true;
     // Grade writes run immediately after every response; closing a
@@ -571,33 +523,28 @@ class AkebiStudyModal extends Modal {
   }
 
   async _loadCards() {
-    const files = this.app.vault.getMarkdownFiles();
-    const collected = [];
+    const files = this.app.vault.getMarkdownFiles().filter(f=>!excludedPath(f.path,this.owner.settings.excludedPaths||[]));
+    const collected = [];const observedTags=new Set();
     // Serial reads avoid spiking memory/IO on iPhone. Metadata cache is
     // not guaranteed to be warm, so read every eligible plain Markdown.
     for (const file of files) {
       if (this._closed) return;
       const cache = this.app.metadataCache.getFileCache(file);
+      if(cache?.frontmatter?.akebi?.exclude===true)continue;
       const cachedTags = cache ? (getAllTags(cache) || []) : null;
       if (cachedTags && !cachedTags.some(t=>t === "#flashcards" || t.startsWith("#flashcards/") || t === "#akebi" || t.startsWith("#akebi/"))) continue;
       const raw = await this.app.vault.cachedRead(file);
-      if (!raw.includes("#flashcards") && !raw.includes("#akebi")) continue;
-      const tag = studyTag(raw);
-      if (tag) collected.push(...studyCards(file, raw, tag));
+      const tags=studyTags(raw,cachedTags||[]);
+      for(const tag of tags){const parts=tag.split("/");for(let i=1;i<=parts.length;i++)observedTags.add(parts.slice(0,i).join("/"));}
+      if(tags.length)collected.push(...studyCards(file,raw,tags[0],tags));
     }
     this.invalidSentenceCount=collected.filter(c=>c.sentence && !studySentenceSpec(c)).length;
-    this.cards = [...new Map(collected.filter(card => card.vocab?.quizEnabled !== false &&
-      (!card.sentence || studySentenceSpec(card)))
-      .map(card => [card.id, card])).values()];
+    const found=dedupeCards(collected.filter(c=>c.vocab?.quizEnabled!==false && (!c.sentence || studySentenceSpec(c))));
+    this.cards=found.cards;this.duplicateCount=found.duplicates;
     await this.owner.adoptCardIds(this.cards);
-    // Upgrade a stored old "A1 entire level" selection to the smaller
-    // Stage 1 without moving notes or touching any mastery records.
-    const firstStage = this.selectedVocabulary + "/Stage 01";
-    if (/^CEFR-J\/(A1|A2|B1|B2)$/.test(this.selectedVocabulary) &&
-        this.cards.some(c => (c.vocab?.memberships || []).includes(firstStage))) {
-      this.selectedVocabulary = firstStage;
-      this._saveBrowserPreferences();
-    }
+    this._tree=makeTree(this.cards);this._cardIndex=new Map(this.cards.map(c=>[c.id,c]));
+    while(this.selectedDeck && !this._tree.has(this.selectedDeck))this.selectedDeck=this.selectedDeck.split('/').slice(0,-1).join('/');
+    this.owner._knownTagPaths=[...new Set([...this._tree.keys(),...observedTags])].filter(Boolean);
   }
 
   _level(card, nowMs = Date.now()) {
@@ -654,353 +601,82 @@ class AkebiStudyModal extends Modal {
     return chart;
   }
 
-  _genreList() {
-    return ["すべて", ...new Set(this.cards.map(x => x.genre))].sort((a, b) =>
-      a === "すべて" ? -1 : b === "すべて" ? 1 : a.localeCompare(b, "ja")
-    );
-  }
-
   _saveBrowserPreferences() {
-    const settings = this.owner.settings;
-    settings.selectedStudyStage = this.selectedStage;
-    settings.selectedStudyGenre = this.selectedGenre;
-    settings.selectedStudyCourse = this.selectedCourse || "";
-    settings.selectedStudyFolder = this.selectedFolder || "";
-    settings.selectedStudyVocabulary = this.selectedVocabulary || "";
-    settings.selectedStudyActivity = this.selectedActivity || "all";
-    settings.selectedStudyBrowseSubdecks = this.browseSubdecks;
-    void this.owner.saveData(settings);
+    this.owner.settings.selectedStudyStage=this.selectedStage;
+    this.owner.settings.selectedDeckTag=this.selectedDeck;
+    void this.owner.saveData(this.owner.settings);
   }
-
   _matchesDeck(card) {
-    if (this.selectedGenre !== "すべて" && card.genre !== this.selectedGenre) return false;
-    if (this.selectedCourse && card.course !== this.selectedCourse) return false;
-    if (this.selectedFolder && card.folder !== this.selectedFolder) return false;
-    if (this.selectedVocabulary && !(card.vocab?.memberships || []).includes(this.selectedVocabulary)) return false;
-    if (this.selectedCourse && this.selectedGenre === "大学一般" &&
-        this.selectedActivity === "sentence" && !studySentenceSpec(card)) return false;
-    if (this.selectedCourse && this.selectedGenre === "大学一般" &&
-        this.selectedActivity === "word" && !!studySentenceSpec(card)) return false;
-    return true;
+    if(!this.selectedDeck)return false;
+    return (card.tagPaths || [tagPath(card.deck || card.genre || 'general')]).some(p=>p===this.selectedDeck || p.startsWith(this.selectedDeck+'/'));
   }
-
-  _vocabularyLabel(id) {
-    const match = /^CEFR-J\/(A1|A2|B1|B2)\/Stage (\d+)$/.exec(id || "");
-    if (match) return "CEFR-J " + match[1] + " · Stage " + Number(match[2]);
-    const named = { "CEFR-J/A1": "CEFR-J A1", "CEFR-J/A2": "CEFR-J A2",
-      "CEFR-J/B1": "CEFR-J B1", "CEFR-J/B2": "CEFR-J B2",
-      "NGSL/一般基礎": "NGSL 一般基礎", "NAWL/学術": "NAWL 学術英語",
-      "TSL/TOEIC": "TSL TOEIC", "NGSL-GR/補助語": "NGSL-GR 補助語" };
-    return named[id] || (id.startsWith("NGSL-GR/") ? "NGSL-GR 段階 " + Number(id.split("/")[1]) : id);
+  _nodeCards(path, direct=false) {
+    const node=this._tree?.get(path);if(!node)return [];
+    return [...(direct?node.direct:node.ids)].map(id=>this._cardIndex.get(id)).filter(Boolean);
   }
-
-  _renderVocabularyBrowser(parent, cards) {
-    const panel = parent.createDiv({ cls: "sr-mastery-vocabulary-browser" });
-    const groups = [
-      ["CEFR-Jのレベル", ["CEFR-J/A1","CEFR-J/A2","CEFR-J/B1","CEFR-J/B2"]],
-      ["目的・使用頻度", ["NGSL/一般基礎","NAWL/学術","TSL/TOEIC"]],
-      ["NGSL-GRの段階", ["NGSL-GR/補助語", ...Array.from({length:11},(_,i)=>"NGSL-GR/"+String(i+1).padStart(2,"0"))]]
-    ];
-    for (const [title, ids] of groups) {
-      if (!ids.some(id=>cards.some(c=>(c.vocab?.memberships||[]).includes(id)))) continue;
-      const section = title.startsWith("NGSL-GR")
-        ? panel.createEl("details", { cls: "sr-mastery-vocabulary-extra" }) : panel;
-      section.createEl(title.startsWith("NGSL-GR") ? "summary" : "h4", { text: title });
-      const row = section.createDiv({ cls: "sr-mastery-vocabulary-facets" });
-      for (const id of ids) {
-        const count=cards.filter(c=>(c.vocab?.memberships||[]).includes(id)).length;
-        if (!count) continue;
-        const btn=row.createEl("button", { text: this._vocabularyLabel(id)+" · "+count+"問", cls:"sr-mastery-vocabulary-filter" });
-        btn.setAttribute("data-vocabulary",id);
-        btn.setAttribute("aria-pressed",String(this.selectedVocabulary===id));
-        btn.classList.toggle("is-selected",this.selectedVocabulary===id);
-        btn.addEventListener("click",()=>{
-          // Select a manageable Stage 1 rather than making the learner
-          // begin an intimidating 1,000-2,800 item level by default.
-          const firstStage = id + "/Stage 01";
-          this.selectedVocabulary = title === "CEFR-Jのレベル" &&
-            cards.some(c => (c.vocab?.memberships || []).includes(firstStage))
-            ? firstStage : id;
-          this.selectedCourse=null;this.selectedFolder=null;
-          this._saveBrowserPreferences();this._renderHome();
-        });
-      }
-      if (title === "CEFR-Jのレベル") {
-        const selected = /^CEFR-J\/(A1|A2|B1|B2)(?:\/Stage \d+)?$/.exec(this.selectedVocabulary || "");
-        if (selected) {
-          const parentTag = "CEFR-J/" + selected[1];
-          const stages = [...new Set(cards.flatMap(c => c.vocab?.memberships || [])
-            .filter(tag => tag.startsWith(parentTag + "/Stage ")))]
-            .sort((a,b) => Number(a.split("Stage ")[1]) - Number(b.split("Stage ")[1]));
-          if (stages.length) {
-            const stageHeader = panel.createEl("h4", {
-              text: "CEFR-J " + selected[1] + " — Stage別（約230〜250問）"
-            });
-            const stageGrid = panel.createDiv({
-              cls: "sr-mastery-vocabulary-facets sr-mastery-vocabulary-stages"
-            });
-            for (const stageId of stages) {
-              const scoped = cards.filter(c => (c.vocab?.memberships || []).includes(stageId));
-              const stageNumber = Number(stageId.split("Stage ")[1]);
-              const button = stageGrid.createEl("button", {
-                text: "Stage " + stageNumber + " · " + scoped.length + "問",
-                cls: "sr-mastery-vocabulary-filter sr-mastery-vocabulary-stage"
-              });
-              button.setAttribute("data-vocabulary", stageId);
-              button.setAttribute("aria-pressed", String(this.selectedVocabulary === stageId));
-              button.classList.toggle("is-selected", this.selectedVocabulary === stageId);
-              button.addEventListener("click", () => {
-                this.selectedVocabulary = stageId;
-                this.selectedCourse = null;
-                this.selectedFolder = null;
-                this._saveBrowserPreferences();
-                this._renderHome();
-              });
-            }
-          }
-        }
-      }
-    }
-    panel.createEl("p",{cls:"sr-mastery-caption",text:"CEFR-JはStageごと約230〜250問。目的別・段階別は同じカードの別分類なのでEaseを共有します。"});
+  _goDeck(path) {
+    if(!this._tree?.has(path))return;
+    this.selectedDeck=path;this._saveBrowserPreferences();this._renderHome();this.main.scrollTop=0;
   }
-
-  _renderSubdeckBrowser(parent) {
-    const container = parent.createDiv({ cls: "sr-mastery-subdeck-browser" });
-    const back = container.createEl("button", {
-      text: "‹ ジャンルに戻る", cls: "sr-mastery-subdeck-back"
-    });
-    back.addEventListener("click", () => {
-      this.selectedVocabulary = "";
-      this.browseSubdecks = false;
-      this.selectedVocabulary = "";
-      this.selectedCourse = null;
-      this.selectedFolder = null;
-      this._saveBrowserPreferences();
-      this._renderHome();
-    });
-    container.createEl("h3", { text: this.selectedGenre === "すべて"
-      ? "フォルダ別" : this.selectedGenre + (this.selectedGenre === "英単語" ? " › レベル・目的別" : " › 授業・フォルダ別") });
-
-    const scoped = this.cards.filter(c =>
-      this.selectedGenre === "すべて" || c.genre === this.selectedGenre);
-    const all = container.createEl("button", {
-      text: "このジャンルの全て · " + scoped.length + "問",
-      cls: "sr-mastery-subdeck-all"
-    });
-    all.classList.toggle("is-selected", !this.selectedCourse && !this.selectedFolder && !this.selectedVocabulary);
-    all.addEventListener("click", () => {
-      this.selectedCourse = null;
-      this.selectedFolder = null;
-      this._saveBrowserPreferences();
-      this._renderHome();
-    });
-
-    if (this.selectedGenre === "英単語") this._renderVocabularyBrowser(container, scoped);
-
-    const courses = [...new Set(scoped.map(c => c.course).filter(Boolean))]
-      .sort((a,b) => a.localeCompare(b,"ja"));
-    if (courses.length) {
-      container.createEl("h4", { text: "授業ごとのデッキ" });
-      const group = container.createDiv({ cls: "sr-mastery-subdeck-group" });
-      for (const course of courses) {
-        const count = scoped.filter(c => c.course === course).length;
-        const button = group.createEl("button", {
-          text: course + " · " + count + "問",
-          cls: "sr-mastery-subdeck-course"
-        });
-        button.classList.toggle("is-selected", this.selectedCourse === course);
-        button.setAttribute("aria-pressed", String(this.selectedCourse === course));
-        button.addEventListener("click", () => {
-          this.selectedVocabulary = "";
-          this.selectedCourse = course;
-          this.selectedFolder = null;
-          this.selectedActivity = "all";
-          this._saveBrowserPreferences();
-          this._renderHome();
-        });
-      }
-    }
-
-    if (this.selectedGenre === "大学一般" && this.selectedCourse) {
-      const courseCards = scoped.filter(c => c.course === this.selectedCourse);
-      const relational = courseCards.filter(c => studySentenceSpec(c));
-      if (relational.length) {
-        container.createEl("h4", { text: "学習内容" });
-        const modes = container.createDiv({ cls: "sr-mastery-activity-filters" });
-        for (const [key, label, count] of [
-          ["all", "全て", courseCards.length],
-          ["word", "単語・用語", courseCards.length - relational.length],
-          ["sentence", "関係性・文組み立て", relational.length]
-        ]) {
-          const button = modes.createEl("button", {
-            text: label + " · " + count + "問", cls: "sr-mastery-activity-filter"
-          });
-          button.setAttribute("data-activity", key);
-          button.setAttribute("aria-pressed", String(this.selectedActivity === key));
-          button.classList.toggle("is-selected", this.selectedActivity === key);
-          button.addEventListener("click", () => {
-            this.selectedActivity = key;
-            this._saveBrowserPreferences();
-            this._renderHome();
-          });
-        }
-      }
-    }
-    const folders = [...new Set(scoped.map(c => c.folder).filter(Boolean))]
-      .sort((a,b) => a.localeCompare(b,"ja"));
-    if (folders.length) {
-      container.createEl("h4", { text: "保存フォルダごとのデッキ" });
-      const group = container.createDiv({ cls: "sr-mastery-subdeck-group" });
-      for (const folder of folders) {
-        const count = scoped.filter(c => c.folder === folder).length;
-        const name = folder.split("/").pop() || folder;
-        const button = group.createEl("button", {
-          text: name + " · " + count + "問",
-          cls: "sr-mastery-subdeck-folder"
-        });
-        button.setAttribute("title", folder);
-        button.classList.toggle("is-selected", this.selectedFolder === folder);
-        button.setAttribute("aria-pressed", String(this.selectedFolder === folder));
-        button.addEventListener("click", () => {
-          this.selectedVocabulary = "";
-          this.selectedFolder = folder;
-          this.selectedCourse = null;
-          this._saveBrowserPreferences();
-          this._renderHome();
-        });
-      }
-    }
-  }
-
+  _tagTitle(path) { return tagLabel(path,this.owner.settings.tagLabels||{}); }
+  _scopeLabel() { const parts=this.selectedDeck.split('/').filter(Boolean);return parts.slice(-2).map((_,i)=>this._tagTitle(parts.slice(0,Math.max(1,parts.length-1)+i).join('/'))).join(' › '); }
   _renderHome() {
-    this.current = null;
-    this._stopPronunciation();
-    // All routes back to the deck list (home, Rep result, back button)
-    // request a persistence flush even if the Rep was not completed.
-    if ((this.owner._masteryRevision ?? 0) > (this.owner._masterySavedRevision ?? 0)) {
-      void this.owner._flushMastery?.();
+    this._cancelSentenceDrag?.();this.current=null;this._stopPronunciation();this._stopCelebration();
+    void this.owner._flushMastery?.();
+    this.screen='home';this.modalEl.classList.remove('sr-mastery-timeout-mode');this.main.replaceChildren();
+    if(!this._tree){this._tree=makeTree(this.cards);this._cardIndex=new Map(this.cards.map(c=>[c.id,c]));}
+    if(!this._tree.has(this.selectedDeck))this.selectedDeck='';
+    const crumb=this.main.createDiv({cls:'akebi-breadcrumb'});
+    const root=crumb.createEl('button',{text:'デッキ'});root.addEventListener('click',()=>this._goDeck(''));
+    const parts=this.selectedDeck.split('/').filter(Boolean);
+    for(let i=0;i<parts.length;i++){
+      crumb.createSpan({text:'›',cls:'akebi-crumb-separator'});
+      const path=parts.slice(0,i+1).join('/');const b=crumb.createEl('button',{cls:'akebi-crumb-node'});
+      this._renderDonut(b,this._stats(this._nodeCards(path)),true);
+      b.createSpan({text:this._tagTitle(path)});b.addEventListener('click',()=>this._goDeck(path));
     }
-    this._stopCelebration();
-    this.modalEl.classList.remove("sr-mastery-timeout-mode");
-    this.screen = "home";
-    this.main.replaceChildren();
-    const lead = this.main.createEl("p", { text: "既に答えた問題も含め、いつでも練習できます。", cls: "sr-mastery-caption" });
-    if(this.invalidSentenceCount)this.main.createEl("p",{text:this.invalidSentenceCount+"問の文組み立てを出題保留しています。正答とフレーズ構成を確認してください。",cls:"sr-mastery-caption"});
-    if (this.browseSubdecks) {
-      this._renderSubdeckBrowser(this.main);
-    } else {
-      const categories = this.main.createDiv({ cls: "sr-mastery-categories" });
-      for (const genre of this._genreList()) {
-        const genreCards = this.cards.filter(c => genre === "すべて" || c.genre === genre);
-        const genreStats = this._stats(genreCards);
-        const button = categories.createEl("button", { cls: "sr-mastery-category" });
-        this._renderDonut(button, genreStats, true);
-        const caption = button.createDiv({ cls: "sr-mastery-category-info" });
-        caption.createSpan({
-          text: ["大学一般", "英単語"].includes(genre) ? genre + " ›" : genre,
-          cls: "sr-mastery-category-name"
-        });
-        caption.createSpan({ text: genreCards.length + "問", cls: "sr-mastery-caption" });
-        if (genre === "大学一般") {
-          button.setAttribute("aria-label", "大学一般を授業別・フォルダ別に開く");
-        }
-        if (genre === this.selectedGenre) button.classList.add("is-selected");
-        button.setAttribute("aria-pressed", String(genre === this.selectedGenre));
-        button.addEventListener("click", () => {
-          this.selectedVocabulary = "";
-          this.selectedGenre = genre;
-          this.selectedCourse = null;
-          this.selectedFolder = null;
-          this.browseSubdecks = ["大学一般", "英単語"].includes(genre);
-          this._saveBrowserPreferences();
-          this._renderHome();
-        });
+    if(this.invalidSentenceCount)this.main.createEl('p',{text:this.invalidSentenceCount+'問の文組み立てを保留中。設定の検査から確認できます。',cls:'sr-mastery-caption'});
+    const node=this._tree.get(this.selectedDeck);
+    const children=[...node.children].sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
+    if(children.length){
+      const grid=this.main.createDiv({cls:'akebi-deck-tree'});
+      for(const path of children){
+        const cards=this._nodeCards(path);const button=grid.createEl('button',{cls:'akebi-deck-node'});
+        button.setAttribute('data-deck',path);this._renderDonut(button,this._stats(cards),true);
+        const text=button.createDiv({cls:'akebi-deck-text'});
+        text.createSpan({text:this._tagTitle(path),cls:'akebi-deck-name'});
+        text.createSpan({text:cards.length+'問',cls:'sr-mastery-caption'});
+        button.createSpan({text:'›',cls:'akebi-deck-arrow'});button.addEventListener('click',()=>this._goDeck(path));
       }
-      const folders = this.main.createEl("button", {
-        text: "保存フォルダから選ぶ ›", cls: "sr-mastery-folder-drill"
-      });
-      folders.addEventListener("click", () => {
-        this.selectedVocabulary = "";
-        this.selectedGenre = "すべて";
-        this.selectedCourse = null;
-        this.selectedFolder = null;
-        this.browseSubdecks = true;
-        this._saveBrowserPreferences();
-        this._renderHome();
-      });
+      // Branch pages are navigation, never an implicit cross-subject “all” deck.
+      if(!node.direct.size || !this.selectedDeck)return;
     }
-    const cards = this.cards.filter(c => this._matchesDeck(c));
-    const stats = this._stats(cards);
-    const overview = this.main.createDiv({ cls: "sr-mastery-overview" });
-    this._renderDonut(overview, stats);
-    const overviewDetail = overview.createDiv({ cls: "sr-mastery-overview-detail" });
-    const scopeName = (this.selectedVocabulary ? this._vocabularyLabel(this.selectedVocabulary) : "") || this.selectedCourse ||
-      (this.selectedFolder ? this.selectedFolder.split("/").pop() : this.selectedGenre);
-    overviewDetail.createEl("strong", {
-      text: scopeName + " · " + cards.length + "問"
-    });
-    overviewDetail.createEl("p", { cls: "sr-mastery-caption",
-      text: "学習済み " + (cards.length - stats.unseen) + "問" });
-    const legend = overviewDetail.createDiv({ cls: "sr-mastery-legend" });
-    for (const stage of STUDY_LEVELS) {
-      const item = legend.createSpan({ cls: "sr-mastery-legend-item" });
-      item.createSpan({ cls: "sr-mastery-legend-dot is-" + stage });
-      item.createSpan({ text: STUDY_LABELS[stage] + " " + stats[stage] });
+    if(!this.selectedDeck){this.main.createEl('p',{text:'ノートに #flashcards/university/biology のようなタグを付けるとデッキが現れます。',cls:'sr-mastery-caption'});return;}
+    const cards=children.length?this._nodeCards(this.selectedDeck,true):this._nodeCards(this.selectedDeck);
+    const stats=this._stats(cards);
+    const overview=this.main.createDiv({cls:'sr-mastery-overview'});this._renderDonut(overview,stats);
+    const info=overview.createDiv({cls:'sr-mastery-overview-detail'});
+    info.createEl('strong',{text:this._tagTitle(this.selectedDeck)+' · '+cards.length+'問'});
+    const legend=info.createDiv({cls:'sr-mastery-legend'});
+    for(const level of STUDY_LEVELS){const item=legend.createSpan({cls:'sr-mastery-legend-item'});item.createSpan({cls:'sr-mastery-legend-dot is-'+level});item.createSpan({text:STUDY_LABELS[level]+' '+stats[level]});}
+    const due=cards.filter(c=>this._isDue(c));
+    if(due.length){const b=this.main.createEl('button',{text:'復習推奨 '+due.length+'問 ›',cls:'sr-mastery-due-start'});b.addEventListener('click',()=>this._start(due,true));}
+    const stages=this.main.createDiv({cls:'sr-mastery-stats'});
+    for(const level of ['unseen','weak','known','all','perfect']){
+      const b=stages.createEl('button',{text:(level==='all'?'全て':STUDY_LABELS[level])+' '+(level==='all'?cards.length:stats[level]),cls:'sr-mastery-stat'});
+      b.classList.toggle('is-selected',this.selectedStage===level);b.addEventListener('click',()=>{this.selectedStage=level;this._saveBrowserPreferences();this._renderHome();});
     }
-    const due = cards.filter(card => this._isDue(card));
-    if (due.length) {
-      const review = this.main.createEl("button", {
-        text: "復習推奨 " + due.length + "問 ›",
-        cls: "sr-mastery-due-start"
-      });
-      review.setAttribute("aria-label", "記憶の予測期限が来たカードを復習する");
-      review.addEventListener("click", () => this._start(due, true));
-    } else {
-      const upcoming = cards.map(card =>
-        studyMemoryState(this.owner._mastery?.[card.id]))
-        .filter(state => state?.dueAt)
-        .sort((a,b) => a.dueAt.localeCompare(b.dueAt))[0];
-      if (upcoming) {
-        const date = new Date(upcoming.dueAt);
-        this.main.createEl("p", {
-          cls: "sr-mastery-caption sr-mastery-upcoming",
-          text: "次回の復習目安：" +
-            date.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })
-        });
-      }
-    }
-    const statRow = this.main.createDiv({ cls: "sr-mastery-stats" });
-    // First row: 未着手・苦手・わかる / second: 全て・完璧.
-    const stages = ["unseen", "weak", "known", "all", "perfect"];
-    for (const stage of stages) {
-      const amount = stage === "all" ? cards.length : stats[stage];
-      const button = statRow.createEl("button");
-      button.type = "button";
-      button.className = "sr-mastery-stat";
-      const name = stage === "all" ? "全て" : STUDY_LABELS[stage];
-      button.textContent = name + " " + amount;
-      button.classList.toggle("is-selected", this.selectedStage === stage);
-      button.addEventListener("click", () => {
-        this.selectedStage = stage;
-        this._saveBrowserPreferences();
-        this._renderHome();
-      });
-    }
-    const start = this.main.createEl("button", { text: "学習を始める", cls: "sr-mastery-start" });
-    start.disabled = cards.length === 0 ||
-      (this.selectedStage !== "all" && stats[this.selectedStage] === 0);
-    start.addEventListener("click", () => this._start(cards));
-
-    if (cards.length === 0) {
-      this.main.createEl("p", { text: "このジャンルにカードはありません。#flashcards/ジャンル タグをノートに付けてください。", cls: "sr-mastery-caption" });
-    }
+    const start=this.main.createEl('button',{text:'学習を始める',cls:'sr-mastery-start'});
+    start.disabled=!cards.length || (this.selectedStage!=='all'&&!stats[this.selectedStage]);
+    start.addEventListener('click',()=>this._start(cards));
   }
 
   _selectionCards() {
     // The live selection, not the completed session's old queue. Re-evaluate
     // mastery after every round so "weak" and "known" can be exhausted.
-    return this.cards.filter(c => this._matchesDeck(c) &&
-      (this.selectedStage === "all" || this._level(c) === this.selectedStage));
+    const node=this._tree?.get(this.selectedDeck);
+    const scoped=node ? this._nodeCards(this.selectedDeck,!!node.children.size) : this.cards.filter(c=>this._matchesDeck(c));
+    return scoped.filter(c=>this.selectedStage === "all" || this._level(c) === this.selectedStage);
   }
 
   _repeatSameSelection() {
@@ -1008,19 +684,21 @@ class AkebiStudyModal extends Modal {
     const candidates = this._selectionCards();
     if (!candidates.length) return; // Cleared level: don't switch to All.
     void this.owner._flushMastery?.();
-    this._start(candidates);
+    this._start(candidates,false,true);
   }
 
-  _start(candidates, ignoreStage = false) {
+  _start(candidates, ignoreStage = false, continueReps = false) {
+    const previousNumber=this.rep?.number || 0;
+    this._cancelSentenceDrag?.();this.current=null;
     const unique = new Map(candidates.filter(c =>
       ignoreStage || this.selectedStage === "all" ||
       this._level(c) === this.selectedStage
-    ).map(card => [card.id, card]));
+    ).map(card => [reviewKey(card), card]));
     this.queue = studyShuffle([...unique.values()]);
     // A weak card belongs to the NEXT Rep, never the Rep in which
     // it was just seen. Exactly one presentation per card per Rep.
     this.deferredWeak = new Map();
-    this.repSeen = new Set();
+    this.repSeen = new Set();this.repGraded=new Set();
     // Across new sessions, choose never-studied or oldest-reviewed
     // cards first; avoid offering the same recently answered subset.
     const reviewStamp = card => {
@@ -1032,7 +710,7 @@ class AkebiStudyModal extends Modal {
     this.sessionStats = { attempted: 0, correct: 0 };
     this.repHistory = [];
     this.rep = {
-      number: 1,
+      number: continueReps ? previousNumber+1 : 1,
       // The setting is a MAXIMUM, not a guaranteed ten-question batch.
       // When only 3 cards match the selected deck/stage, show 0/3.
       size: Math.min(this.owner.settings.repSize || 10, this.queue.length),
@@ -1043,11 +721,13 @@ class AkebiStudyModal extends Modal {
   }
 
   _next() {
+    if(this.screen==='study' && this.current?.state==='front')return;
+    this._cancelSentenceDrag?.();
     this._stopPronunciation();
     this._token++;
     // A previously shown card cannot be selected again in this Rep,
     // including when an older queue contains duplicates.
-    while (this.queue.length && this.repSeen?.has(this.queue[0].id)) {
+    while (this.queue.length && this.repSeen?.has(reviewKey(this.queue[0]))) {
       // Defensive deduplication: an already shown card must not be
       // re-enqueued merely because a stale duplicate was encountered.
       this.queue.shift();
@@ -1077,7 +757,7 @@ class AkebiStudyModal extends Modal {
       return;
     }
     const card = this.queue.shift();
-    this.repSeen?.add(card.id);
+    this.repSeen?.add(reviewKey(card));
     const now = performance.now();
     this.screen = "study";
     this.current = {
@@ -1097,6 +777,8 @@ class AkebiStudyModal extends Modal {
     if (this.current.sentence) {
       this.current.sentenceBank = studySentenceBank(this.current.sentence);
       this.current.sentenceSelected = [];
+      this.current.sentenceChunks = this.current.sentence.chunks.map(()=>[]);
+      this.current.activeChunk=0;
       this.current.sentencePicked = null;
     }
     this._renderQuestion();
@@ -1167,7 +849,7 @@ class AkebiStudyModal extends Modal {
     });
     next.disabled = !hasPending && !remaining;
     next.addEventListener("click", () => {
-      if (this.settingsOpen || this.screen !== "rep-break") return;
+      if (this.settingsOpen || this.screen !== "rep-break" || this.rep?.number!==rep.number) return;
       if (!hasPending) {
         // Restart *this exact course/folder/genre/difficulty* from live
         // mastery; cards promoted to another difficulty are excluded.
@@ -1181,10 +863,10 @@ class AkebiStudyModal extends Modal {
         this.queue = [...new Map([
           ...this.queue,
           ...studyShuffle([...this.deferredWeak.values()])
-        ].map(card => [card.id, card])).values()];
+        ].map(card => [reviewKey(card), card])).values()];
         this.deferredWeak.clear();
       }
-      this.repSeen = new Set();
+      this.repSeen = new Set();this.repGraded=new Set();
       this.rep = {
         number: rep.number + 1,
         size: Math.min(this.owner.settings.repSize || 10, this.queue.length),
@@ -1240,7 +922,7 @@ class AkebiStudyModal extends Modal {
 
   _pause(leaving = false) {
     if (!this.current) return;
-    if (leaving) { this.current = null; return; }
+    if (leaving) { if(this.current.state==="front" && this._remaining()<=0)this._reveal("timeout");this.current = null; return; }
     if (this.current.state === "front") {
       this.current.remainingFrozen = this._remaining();
     }
@@ -1288,6 +970,8 @@ class AkebiStudyModal extends Modal {
     const quick = !!correct && q.revealReason !== "timeout" &&
       q.responseMs <= (q.sentence ? sentenceEasyMs
         : this.owner.settings.easyThresholdSeconds * 1000);
+    if(this.repGraded?.has(reviewKey(q.card)))return;
+    this.repGraded?.add(reviewKey(q.card));
     const old = this.owner._mastery?.[q.card.id] ??
       { stage: q.card.studied ? "known" : "unseen" };
     const next = studyMasteryNext(old, correct, {
@@ -1314,9 +998,9 @@ class AkebiStudyModal extends Modal {
       // Review unsuccessful retrievals only after new questions have
       // been exhausted. A correct answer that merely remains "weak"
       // must NOT be forced back into the next Rep.
-      this.deferredWeak.set(q.card.id, q.card);
+      this.deferredWeak.set(reviewKey(q.card), q.card);
     } else {
-      this.deferredWeak.delete(q.card.id);
+      this.deferredWeak.delete(reviewKey(q.card));
     }
     if (q.revealReason !== "timeout") this._playSound(correct ? "correct" : "wrong");
     // Timeout plays a single audio cue at expiry and is already graded.
@@ -1325,102 +1009,6 @@ class AkebiStudyModal extends Modal {
       if (keepTimeoutFeedback) this._renderTimeoutOnly(q);
       else this._next();
     } else this._renderQuestion();
-  }
-
-  _sentenceCanEdit(q) {
-    if (!q || q !== this.current || q.state !== "front" ||
-        this.screen !== "study" || this.settingsOpen || this._inResumeGrace()) return false;
-    if (this._remaining() <= 0) {
-      this._reveal("timeout");
-      return false;
-    }
-    return true;
-  }
-
-  _sentencePlace(q, id) {
-    if(!this._sentenceCanEdit(q) || q.sentenceSelected.length>=q.sentence.maxLength || q.sentenceSelected.includes(id) || !q.sentenceBank.some(t=>t.id===id))return;
-    q.sentenceSelected.push(id);this._refreshSentence(q);
-  }
-  _sentencePick(q,index) {
-    if(!this._sentenceCanEdit(q) || index<0 || index>=q.sentenceSelected.length)return;
-    q.sentenceSelected.splice(index,1);this._refreshSentence(q);
-  }
-  _sentenceSubmit(q) {
-    if(!this._sentenceCanEdit(q))return;
-    const lengths=[q.sentence.tokens.length,...q.sentence.alternatives.map(a=>a.length)];
-    if(!lengths.includes(q.sentenceSelected.length))return;
-    const byId=new Map(q.sentenceBank.map(t=>[t.id,t]));
-    const chosen=q.sentenceSelected.map(id=>byId.get(id));
-    if(chosen.some(t=>!t) || new Set(q.sentenceSelected).size!==chosen.length)return;
-    const correct=studySentenceAccepted(q.sentence,chosen);
-    q.responseMs=this._elapsed();q.state='back';q.revealReason='sentence';
-    q.choice=q.sentence.prefix+chosen.map(t=>t.text).join('')+q.sentence.suffix;
-    this._rate(correct);
-  }
-  _refreshSentence(q) {
-    if(q!==this.current || !q.sentenceBoard)return;
-    q.sentenceBoard.replaceChildren();
-    if(!q.sentenceSelected.length)q.sentenceBoard.createSpan({text:'ここに文を組み立てる',cls:'akebi-placeholder'});
-    const byId=new Map(q.sentenceBank.map(t=>[t.id,t]));
-    q.sentenceSelected.forEach((id,i)=>{
-      const chip=q.sentenceBoard.createEl('button',{text:byId.get(id).text,cls:'sr-sentence-chip sr-sentence-selected'});
-      chip.type='button';chip.setAttribute('aria-label',byId.get(id).text+'を戻す');
-      chip.addEventListener('click',()=>this._sentencePick(q,i));
-    });
-    for(const [id,button] of q.bankButtons){
-      const used=q.sentenceSelected.includes(id);
-      button.disabled=used || q.sentenceSelected.length>=q.sentence.maxLength;
-      button.classList.toggle('is-used',used);button.setAttribute('aria-pressed',String(used));
-    }
-    const complete=[q.sentence.tokens.length,...q.sentence.alternatives.map(a=>a.length)].includes(q.sentenceSelected.length);
-    q.checkButton.disabled=!complete;q.undoButton.disabled=q.sentenceSelected.length===0;
-    q.sentenceCounter.textContent=q.sentenceSelected.length+' / '+q.sentence.tokens.length+' フレーズ';
-  }
-  _renderSentenceQuestion(q) {
-    if(!q || q!==this.current)return;
-    this.modalEl.classList.remove('sr-mastery-timeout-mode');this.main.replaceChildren();
-    this.clockValue=null;this.clockBar=null;
-    this.main.createEl('p',{text:(q.card.course || q.card.genre)+' · 文組み立て',cls:'sr-mastery-caption'});
-    if(this.rep)this.main.createEl('p',{text:'Rep '+this.rep.number+' · '+this.rep.attempted+'/'+this.rep.size+' 回答',cls:'sr-mastery-rep-progress'});
-    this.main.createEl('h3',{text:q.card.question,cls:'sr-sentence-question'});
-    if(q.state==='front'){
-      const clock=this.main.createDiv({cls:'sr-mastery-clock'});
-      this.clockValue=clock.createSpan();this.clockBar=clock.createDiv({cls:'sr-mastery-clock-track'}).createDiv({cls:'sr-mastery-clock-bar'});
-      const frame=this.main.createDiv({cls:'akebi-sentence-frame'});
-      frame.createEl('p',{text:q.sentence.prefix,cls:'akebi-fixed-boundary'});
-      q.sentenceBoard=frame.createDiv({cls:'sr-sentence-placed'});
-      q.sentenceBoard.setAttribute('aria-label','組み立てる中央部分');
-      frame.createEl('p',{text:q.sentence.suffix,cls:'akebi-fixed-boundary'});
-      q.sentenceCounter=this.main.createEl('p',{cls:'sr-sentence-counter'});
-      this.main.createEl('p',{text:'候補を順番に選ぶ。上のフレーズをタップすると戻せます。',cls:'sr-mastery-caption'});
-      const pool=this.main.createDiv({cls:'sr-sentence-bank'});
-      pool.setAttribute('role','group');pool.setAttribute('aria-label','全ての候補フレーズ');
-      q.bankButtons=new Map();
-      for(const tile of q.sentenceBank){
-        const b=pool.createEl('button',{text:tile.text,cls:'sr-sentence-chip sr-sentence-bank-chip'});b.type='button';
-        b.setAttribute('data-piece',tile.id);b.addEventListener('click',()=>this._sentencePlace(q,tile.id));q.bankButtons.set(tile.id,b);
-      }
-      const actions=this.main.createDiv({cls:'sr-sentence-actions'});
-      q.undoButton=actions.createEl('button',{text:'一つ戻す'});q.undoButton.type='button';
-      q.undoButton.addEventListener('click',()=>this._sentencePick(q,q.sentenceSelected.length-1));
-      q.checkButton=actions.createEl('button',{text:'答え合わせ',cls:'mod-cta sr-sentence-check'});q.checkButton.type='button';
-      q.checkButton.addEventListener('click',()=>this._sentenceSubmit(q));
-      this._refreshSentence(q);this._tick();
-    }else{
-      const status=q.revealReason==='timeout'?'時間切れ · FAIL記録済み':q.result?.correct?'正解！':'役割・順序・否定を確認しよう';
-      this.main.createEl('p',{text:status,cls:'sr-sentence-result-status'});
-      const byId=new Map(q.sentenceBank.map(t=>[t.id,t]));
-      if(q.sentenceSelected.length){
-        this.main.createEl('p',{text:'組み立てた文',cls:'sr-sentence-caption'});
-        this.main.createEl('p',{text:q.sentence.prefix+q.sentenceSelected.map(id=>byId.get(id)?.text||'').join('')+q.sentence.suffix,cls:'sr-sentence-attempt'});
-      }
-      this.main.createEl('p',{text:'模範文',cls:'sr-sentence-caption'});
-      this.main.createEl('p',{text:q.sentence.canonical,cls:'sr-sentence-canonical'});
-      if(q.card.explanation)this.main.createEl('p',{text:q.card.explanation,cls:'sr-mastery-explanation'});
-      if(q.card.tips)this.main.createEl('p',{text:q.card.tips,cls:'sr-mastery-tips'});
-      const next=this.main.createEl('button',{text:'次の問題に進む',cls:'sr-mastery-next'});
-      next.addEventListener('click',()=>{if(this.current===q && q.state==='graded' && !this.settingsOpen)this._next();});
-    }
   }
 
   _renderTimeoutOnly(q) {
@@ -1441,6 +1029,7 @@ class AkebiStudyModal extends Modal {
       ? "時間切れ。正答と解説。次の問題に進む"
       : "時間切れ。正答と解説。左へスワイプして次へ");
     card.createEl("p", { text: q.card.question, cls: "sr-mastery-question" });
+    this._renderCardImages(card,q.card,q.state==="front"?"question":"answer");
     card.createEl("p", { text: "正答：" + q.card.answer, cls: "sr-mastery-answer" });
     card.createEl("p", { text: "解説", cls: "sr-mastery-explanation-title" });
     card.createEl("p", {
@@ -1525,6 +1114,7 @@ class AkebiStudyModal extends Modal {
     card.setAttribute("role", "group");
     card.setAttribute("aria-label", "問題");
     card.createEl("p", { text: q.card.question, cls: "sr-mastery-question" });
+    this._renderCardImages(card,q.card,q.state==="front"?"question":"answer");
     if (q.card.audio?.length) {
       const pronunciation = card.createEl("button", { cls: "sr-mastery-pronunciation" });
       pronunciation.type = "button";
@@ -1766,6 +1356,7 @@ class AkebiStudyModal extends Modal {
   }
 
   _openSettings() {
+    this._cancelSentenceDrag?.();
     if (this.settingsOpen) return;
     this._pause();
     this._stopCelebration();
@@ -1785,7 +1376,15 @@ class AkebiStudyModal extends Modal {
     selector.value = this.owner.settings.studyMode;
     selector.addEventListener("change", () => this._setSetting("studyMode", selector.value));
     this._renderCardMetadataEditor(layer);
+    this._renderImageEditor(layer);
 
+    const tagNames=layer.createEl('button',{text:'タグ階層の表示名',cls:'akebi-tag-settings-button'});
+    tagNames.addEventListener('click',()=>this.owner.openTagNames(this.cards));
+    const area=layer.createDiv({cls:'sr-mastery-setting-field'});
+    area.createEl('label',{text:'文組み立て欄の固定高さ'});
+    const height=area.createEl('input');height.type='range';height.min='220';height.max='520';height.step='20';height.value=this.owner.settings.sentenceAreaHeight||320;
+    const value=area.createSpan({text:height.value+' px'});
+    height.addEventListener('input',()=>{value.textContent=height.value+' px';this._setSetting('sentenceAreaHeight',Number(height.value));});
     const repField = layer.createDiv({ cls: "sr-mastery-setting-field" });
     repField.createEl("label", { text: "1 Repあたりの問題数" });
     const repInput = repField.createEl("input");
@@ -1931,4 +1530,6 @@ class AkebiStudyModal extends Modal {
   }
 }
 
-module.exports = { AkebiStudyModal, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceAccepted, studySentenceBank, studyMemoryState };
+Object.assign(AkebiStudyModal.prototype, require('./phrase-ui'),require('./media').mediaUI);
+
+module.exports = { AkebiStudyModal, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, reviewKey, excludedPath, makeTree, tagLabel };
