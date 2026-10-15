@@ -1,0 +1,8 @@
+node_modules/
+.local/
+data.json
+mastery.json
+legacy-import-backup.json
+*.bak*
+.DS_Store
+screenshots-private/

@@ -1,0 +1,97 @@
+/* akeBi: scoped, theme-aware and scrollable on desktop and touch devices. */
+.modal.akebi-modal { width:min(840px,96vw); max-width:96vw; height:min(94dvh,1000px); max-height:94dvh; padding:14px; }
+.akebi-modal .modal-content { height:100%; min-height:0; margin:0; overflow:hidden; }
+.akebi-modal { --sr-mastery-weak: #bd91a8; --sr-mastery-known:#9badd0; --sr-mastery-perfect:#9dbfac; }
+.akebi-modal .sr-mastery-shell { height:100%; min-height:0; display:flex; flex-direction:column; position:relative; }
+.akebi-modal .sr-mastery-topbar { flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:4px 28px 12px 0; }
+.akebi-modal .sr-mastery-heading { flex:1; font-weight:650; text-align:center; white-space:nowrap; }
+.akebi-modal .sr-mastery-gear { display:flex; align-items:center; justify-content:center; width:42px; height:42px; padding:8px; }
+.akebi-modal .sr-mastery-gear svg { width:22px; height:22px; }
+.akebi-modal .sr-mastery-home-button { min-height:42px; }
+.akebi-modal .sr-mastery-main { flex:1 1 auto; min-height:0; display:block; overflow-y:auto; overflow-x:hidden; padding:2px 8px 30px 2px; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+.akebi-modal .sr-mastery-main > * { flex-shrink:0; }
+.akebi-modal button { touch-action:manipulation; cursor:pointer; }
+.akebi-modal button:disabled { cursor:default; opacity:.45; }
+.akebi-modal [hidden] { display:none !important; }
+.akebi-modal .sr-mastery-caption { color:var(--text-muted); font-size:.84rem; line-height:1.5; overflow-wrap:anywhere; }
+.akebi-modal .sr-mastery-main h3 { line-height:1.5; margin:10px 0; }
+.akebi-modal .sr-mastery-categories { display:grid; grid-auto-flow:column; grid-template-rows:repeat(2,minmax(64px,auto)); grid-auto-columns:minmax(115px,1fr); gap:8px; overflow-x:auto; padding:3px 2px 8px; }
+.akebi-modal .sr-mastery-category { display:flex; gap:8px; align-items:center; padding:7px; min-height:64px; white-space:normal; }
+.akebi-modal .sr-mastery-category-info { display:flex; flex-direction:column; min-width:0; text-align:left; }
+.akebi-modal .sr-mastery-category-name { font-size:.91rem; font-weight:600; }
+.akebi-modal button.is-selected { outline:2px solid var(--interactive-accent); outline-offset:-2px; background:color-mix(in srgb,var(--interactive-accent) 10%,var(--background-secondary)); }
+.akebi-modal .sr-mastery-folder-drill { display:block; margin:10px 0 10px auto; }
+.akebi-modal .sr-mastery-overview { display:flex; gap:16px; align-items:center; padding:14px 2px; }
+.akebi-modal .sr-mastery-overview-detail { min-width:0; }
+.akebi-modal .sr-mastery-donut { position:relative; width:112px; height:112px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; }
+.akebi-modal .sr-mastery-donut::before { content:""; position:absolute; inset:17%; border-radius:50%; background:var(--background-primary); }
+.akebi-modal .sr-mastery-donut-count { position:relative; font-size:1.08rem; font-weight:650; }
+.akebi-modal .sr-mastery-donut.is-mini { width:42px; height:42px; }
+.akebi-modal .is-mini .sr-mastery-donut-count { font-size:.65rem; }
+.akebi-modal .sr-mastery-legend { display:flex; flex-wrap:wrap; gap:6px 10px; }
+.akebi-modal .sr-mastery-legend-item { font-size:.8rem; display:flex; gap:4px; align-items:center; }
+.akebi-modal .sr-mastery-legend-dot { width:8px; height:8px; border-radius:50%; background:var(--text-faint); }
+.akebi-modal .sr-mastery-legend-dot.is-weak { background:var(--sr-mastery-weak); }
+.akebi-modal .sr-mastery-legend-dot.is-known { background:var(--sr-mastery-known); }
+.akebi-modal .sr-mastery-legend-dot.is-perfect { background:var(--sr-mastery-perfect); }
+.akebi-modal .sr-mastery-stats { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; margin:12px 0; }
+.akebi-modal .sr-mastery-stat { grid-column:span 2; min-height:46px; padding:7px 4px; white-space:normal; }
+.akebi-modal .sr-mastery-stat:nth-child(n+4) { grid-column:span 3; }
+.akebi-modal .sr-mastery-start, .akebi-modal .sr-mastery-next { min-height:46px; padding:10px 14px; width:100%; margin:10px 0; background:var(--interactive-accent); color:var(--text-on-accent); }
+.akebi-modal .sr-mastery-native { min-height:44px; margin:8px 0; }
+.akebi-modal .sr-mastery-due-start { width:100%; min-height:44px; border:1px solid var(--interactive-accent); margin:8px 0; }
+.akebi-modal .sr-mastery-card-info { display:flex; justify-content:space-between; gap:10px; font-size:.83rem; color:var(--text-muted); }
+.akebi-modal .sr-mastery-rep-progress { margin:5px 0 12px; font-size:.85rem; color:var(--text-muted); }
+.akebi-modal .sr-mastery-clock { margin:10px 0; font-size:.85rem; }
+.akebi-modal .sr-mastery-clock-track { height:5px; border-radius:10px; background:var(--background-modifier-border); margin-top:6px; overflow:hidden; }
+.akebi-modal .sr-mastery-clock-bar { height:100%; background:var(--interactive-accent); }
+.akebi-modal .sr-mastery-flashcard { padding:15px; border:1px solid var(--background-modifier-border); border-radius:14px; background:var(--background-secondary); }
+.akebi-modal .sr-mastery-question { font-size:1.2rem; font-weight:600; line-height:1.55; overflow-wrap:anywhere; }
+.akebi-modal .sr-mastery-answer { font-size:1.16rem; line-height:1.6; overflow-wrap:anywhere; }
+.akebi-modal .sr-mastery-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+.akebi-modal .sr-mastery-options button { min-height:62px; height:auto; padding:12px 10px; white-space:normal; line-height:1.5; overflow-wrap:anywhere; }
+.akebi-modal .sr-mastery-reveal { min-height:70px; width:100%; white-space:normal; }
+.akebi-modal .sr-mastery-slide { min-height:200px; }
+.akebi-modal .sr-mastery-ratings { display:flex; gap:8px; }
+.akebi-modal .sr-mastery-ratings button { flex:1; min-height:44px; }
+.akebi-modal .sr-mastery-explanation { font-size:.96rem; line-height:1.7; white-space:pre-wrap; }
+.akebi-modal .sr-mastery-tips { font-size:.87rem; line-height:1.6; color:var(--text-muted); padding:10px 12px; background:var(--background-secondary); border-left:2px solid var(--interactive-accent); }
+.akebi-modal .sr-mastery-chosen-wrong { padding:10px; border:1px solid var(--sr-mastery-weak); border-radius:8px; }
+.akebi-modal .sr-mastery-chosen-wrong-label { font-size:.8rem; color:var(--text-muted); }
+.akebi-modal .sr-mastery-chosen-wrong-value { margin:4px 0; }
+.akebi-modal .sr-mastery-pronunciation { min-height:42px; }
+.akebi-modal .sr-mastery-settings { position:absolute; inset:50px 0 0; z-index:5; background:var(--background-primary); overflow-y:auto; padding:15px; }
+.akebi-modal .sr-mastery-setting-field { display:flex; flex-direction:column; gap:8px; margin:14px 0 20px; }
+.akebi-modal .sr-mastery-setting-field input[type=range] { width:100%; }
+.akebi-modal .sr-mastery-settings-done { min-height:44px; width:100%; margin:10px 0; }
+.akebi-modal .sr-mastery-edit-fields { display:flex; flex-direction:column; gap:10px; }
+.akebi-modal .sr-mastery-edit-fields textarea { width:100%; min-height:65px; }
+.akebi-modal .sr-mastery-mc-editor summary { padding:10px 0; cursor:pointer; }
+.akebi-modal .sr-mastery-rep-summary { padding:12px 5px 20px; text-align:center; }
+.akebi-modal .sr-mastery-rep-fraction { font-size:3rem; }
+.akebi-modal .akebi-celebration { margin:auto; color:var(--interactive-accent); animation:akebi-bloom 1s ease-out; }
+.akebi-modal .akebi-celebration svg { width:80px; height:80px; }
+@keyframes akebi-bloom { from { transform:scale(.7); opacity:.2; } to { transform:scale(1); opacity:1; } }
+@media (prefers-reduced-motion:reduce) { .akebi-modal .akebi-celebration { animation:none; } }
+.akebi-modal .sr-mastery-subdeck-browser { display:flex; flex-direction:column; gap:10px; }
+.akebi-modal .sr-mastery-subdeck-group, .akebi-modal .sr-mastery-vocabulary-facets, .akebi-modal .sr-mastery-activity-filters { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:4px 0 12px; }
+.akebi-modal .sr-mastery-subdeck-group button, .akebi-modal .sr-mastery-vocabulary-filter, .akebi-modal .sr-mastery-activity-filter { min-height:44px; white-space:normal; height:auto; padding:9px 8px; line-height:1.4; }
+.akebi-modal .sr-mastery-subdeck-back { align-self:flex-start; min-height:40px; }
+.akebi-modal .sr-mastery-subdeck-all { min-height:44px; }
+.akebi-modal .sr-mastery-vocabulary-extra summary { min-height:44px; padding:9px 0; cursor:pointer; }
+.akebi-modal .sr-sentence-question { font-size:1.03rem; }
+.akebi-modal .akebi-sentence-frame { border:1px solid var(--background-modifier-border); border-radius:12px; padding:11px; background:var(--background-secondary); }
+.akebi-modal .akebi-fixed-boundary { margin:3px 0; line-height:1.65; font-weight:550; }
+.akebi-modal .sr-sentence-placed { display:flex; flex-wrap:wrap; gap:5px; min-height:54px; margin:9px 0; border-block:1px dashed var(--background-modifier-border); padding:8px 0; }
+.akebi-modal .akebi-placeholder { color:var(--text-faint); font-size:.86rem; }
+.akebi-modal .sr-sentence-bank { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; width:100%; min-width:0; margin:12px 0; padding:0; overflow:visible; }
+.akebi-modal .sr-sentence-chip { min-height:44px; height:auto; max-height:none; white-space:normal; overflow-wrap:anywhere; word-break:normal; padding:8px 6px; font-size:.9rem; line-height:1.4; border:1px solid var(--background-modifier-border); border-radius:9px; background:var(--background-primary); color:var(--text-normal); }
+.akebi-modal .sr-sentence-bank-chip.is-used { opacity:.22; }
+.akebi-modal .sr-sentence-counter { font-size:.8rem; color:var(--text-muted); margin:7px 0; }
+.akebi-modal .sr-sentence-actions { display:grid; grid-template-columns:1fr 2fr; gap:10px; padding:5px 0 12px; }
+.akebi-modal .sr-sentence-actions button { min-height:46px; }
+.akebi-modal .sr-sentence-canonical, .akebi-modal .sr-sentence-attempt { line-height:1.9; padding:12px; border-radius:10px; background:var(--background-secondary); overflow-wrap:anywhere; }
+.akebi-modal .sr-sentence-canonical { border-left:3px solid var(--interactive-accent); }
+.akebi-modal .sr-sentence-caption { font-size:.8rem; color:var(--text-muted); margin:12px 0 4px; }
+.akebi-modal .sr-sentence-result-status { font-weight:650; }
+@media (max-width:450px) { .modal.akebi-modal { width:98vw; max-width:98vw; padding:10px; } .akebi-modal .sr-mastery-main { padding-right:3px; } .akebi-modal .sr-sentence-chip { font-size:.85rem; } }
