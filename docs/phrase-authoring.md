@@ -69,3 +69,10 @@ The editor displays each relation in a fixed-height answer frame, with independe
 Figures belong to individual cards as normal metadata, not to a copied image asset or a particular folder. Use images with an Obsidian Vault link (for example ![[figures/secretory-path.png]]) and showOn "question" or "answer". Two cards can reference the same image; removing one link does not remove the source file.
 
 Prefer a **question** image when the relationship is hard to visualize from prose alone; use an **answer** image for feedback that would otherwise reveal the result. Selecting a displayed image opens the source file in Obsidian. Do not put unrelated images on every card merely to fill space.
+
+
+### PDF++ rectangle references
+
+To attach lecture diagrams, store an Obsidian PDF++ rectangle link in the card-local images array. For example: ![[lecture.pdf#page=6&rect=110,80,830,470&width=450]], with showOn set to answer. This links to the original PDF and does not duplicate it as a PNG.
+
+Select and copy the rectangle in PDF++, then paste it into the Akebi image-link editor or tap the PDF++ clipboard button. Click the source button to open the exact PDF page/rectangle. Reserve question-phase images for diagrams that do not disclose the solution; keep answer-revealing figures behind feedback.

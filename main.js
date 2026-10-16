@@ -588,8 +588,9 @@ var require_phrase_ui = __commonJS({
 var require_media = __commonJS({
   "src/media.js"(exports2, module2) {
     "use strict";
-    var { Notice: Notice2 } = require("obsidian");
-    var EXTENSIONS2 = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
+    var { Notice: Notice2, MarkdownRenderer } = require("obsidian");
+    var EXTENSIONS = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
+    var MEDIA_EXTENSIONS2 = /* @__PURE__ */ new Set([...EXTENSIONS, "pdf"]);
     var META = /^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/;
     function localImage2(value) {
       const raw = typeof value === "string" ? { link: value } : value;
@@ -601,16 +602,51 @@ var require_media = __commonJS({
       if ((input.startsWith("![") || input.startsWith("[[")) && !embedded) return null;
       const pieces = embedded ? embedded[1].split("|") : [input];
       if (pieces.length > 2) return null;
-      const path = pieces[0].trim();
-      if (!path || path.startsWith("/") || /[:\\\r\n\0?#\[\]|]/.test(path) || path.split("/").some((x) => !x || x === "." || x === "..") || !EXTENSIONS2.has(path.split(".").pop().toLowerCase())) return null;
+      const target = pieces[0].trim();
+      const hashAt = target.indexOf("#");
+      const path = (hashAt < 0 ? target : target.slice(0, hashAt)).trim();
+      const ext = path.split(".").pop().toLowerCase();
+      if (!path || path.startsWith("/") || /[:\\\r\n\0?#\[\]|]/.test(path) || path.split("/").some((x) => !x || x === "." || x === "..") || !MEDIA_EXTENSIONS2.has(ext)) return null;
       const alt = typeof raw.alt === "string" && raw.alt.trim() ? raw.alt.trim() : (pieces[1] || "").trim();
       if (/[\r\n]/.test(alt)) return null;
+      let fragment = "", page = null, rect = null, width = null;
+      const isPdf = ext === "pdf";
+      if (isPdf) {
+        if (hashAt < 0) return null;
+        const params = target.slice(hashAt + 1).split("&"), seen = /* @__PURE__ */ new Set();
+        const values = {};
+        for (const param of params) {
+          const k = param.indexOf("=");
+          if (k < 1) return null;
+          const key = param.slice(0, k), val = param.slice(k + 1);
+          if (!["page", "rect", "width"].includes(key) || seen.has(key)) return null;
+          seen.add(key);
+          values[key] = val;
+        }
+        const p = Number(values.page);
+        const r = values.rect?.split(",").map(Number);
+        if (!Number.isInteger(p) || p < 1 || p > 5e4 || !Array.isArray(r) || r.length !== 4 || r.some((n) => !Number.isFinite(n) || n < 0 || n > 3e4) || !(r[0] < r[2] && r[1] < r[3])) return null;
+        const w = values.width === void 0 ? 450 : Number(values.width);
+        if (!Number.isInteger(w) || w < 120 || w > 1200) return null;
+        page = p;
+        rect = r;
+        width = w;
+        fragment = "#page=" + p + "&rect=" + r.map((n) => String(n)).join(",") + "&width=" + w;
+      } else if (hashAt >= 0) return null;
       return {
-        link: "![[" + path + "]]",
+        kind: isPdf ? "pdf-rect" : "image",
+        link: "![[" + path + fragment + "]]",
         path,
+        fragment,
+        page,
+        rect,
+        width,
         alt: alt.slice(0, 200),
         showOn: raw.showOn === "answer" ? "answer" : "question"
       };
+    }
+    function imageWithPath(ref, path) {
+      return "![[" + path + (ref.fragment || "") + "]]";
     }
     function storedImage(image) {
       const data = localImage2(image);
@@ -650,8 +686,7 @@ var require_media = __commonJS({
       return lines.join(newline);
     }
     function rewriteImageLinksInMarkdown2(markdown, oldPath, newPath, allowBasename = false) {
-      const renamed = localImage2({ path: newPath });
-      if (!renamed) return markdown;
+      if (typeof newPath !== "string" || newPath.startsWith("/") || newPath.split("/").some((part) => !part || part === "." || part === "..") || !MEDIA_EXTENSIONS2.has(newPath.split(".").pop().toLowerCase())) return markdown;
       const oldName = oldPath.split("/").pop();
       const newline = markdown.includes("\r\n") ? "\r\n" : "\n", lines = markdown.split(/\r?\n/);
       let changed = false;
@@ -671,7 +706,7 @@ var require_media = __commonJS({
           if (!current) return original;
           if (current.path !== oldPath && !(allowBasename && current.path === oldName)) return original;
           rewritten = true;
-          return { ...storedImage(original), link: renamed.link };
+          return { ...storedImage(original), link: imageWithPath(current, newPath) };
         });
         if (rewritten) {
           lines[i] = found[1] + "%%" + found[2] + " " + JSON.stringify(meta) + "%%";
@@ -686,7 +721,7 @@ var require_media = __commonJS({
       const exact = app?.vault?.getAbstractFileByPath?.(ref.path);
       const linked = app?.metadataCache?.getFirstLinkpathDest?.(ref.path, card?.source || "");
       const file = exact?.extension ? exact : linked;
-      return file && EXTENSIONS2.has((file.extension || "").toLowerCase()) ? { ref, file } : null;
+      return file && MEDIA_EXTENSIONS2.has((file.extension || "").toLowerCase()) ? { ref, file } : null;
     }
     var mediaUI = {
       _renderCardImages(parent, card, phase) {
@@ -699,17 +734,61 @@ var require_media = __commonJS({
             fig.createEl("span", { text: "Vault\u5185\u753B\u50CF\u306E\u540C\u671F\u30FB\u30EA\u30F3\u30AF\u3092\u78BA\u8A8D\uFF1A" + ref.path, cls: "sr-mastery-caption" });
             continue;
           }
-          const open = fig.createEl("button", { cls: "akebi-card-image-link" });
-          open.type = "button";
-          open.setAttribute("aria-label", "Vault\u5185\u306E\u753B\u50CF\u3092\u958B\u304F\uFF1A" + (ref.alt || ref.path));
-          open.title = ref.link + " \xB7 \u30BF\u30C3\u30D7\u3057\u3066\u5143\u753B\u50CF\u3092\u958B\u304F";
-          const image = open.createEl("img");
-          image.alt = ref.alt || resolved.file.basename || "\u554F\u984C\u306E\u56F3";
-          image.draggable = false;
-          image.src = this.app.vault.getResourcePath(resolved.file);
-          open.addEventListener("click", () => {
-            void Promise.resolve(this.app.workspace?.openLinkText?.(resolved.file.path, card.source, true)).catch((error) => new Notice2("\u753B\u50CF\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\uFF1A" + String(error?.message || error)));
-          });
+          if (ref.kind === "pdf-rect") {
+            fig.classList.add("akebi-card-pdf-rect");
+            const region = fig.createDiv({ cls: "akebi-pdf-rect-embed" });
+            const renderer = MarkdownRenderer?.renderMarkdown;
+            if (typeof renderer === "function") {
+              void Promise.resolve(renderer.call(
+                MarkdownRenderer,
+                ref.link,
+                region,
+                card.source || "",
+                this.owner || this
+              )).catch((error) => {
+                region.replaceChildren();
+                region.createSpan({
+                  text: "PDF\u306E\u77E9\u5F62\u3092\u8868\u793A\u3067\u304D\u307E\u305B\u3093\uFF1A" + ref.path,
+                  cls: "sr-mastery-caption"
+                });
+                console.warn("akebi PDF rect render", error);
+              });
+            } else {
+              region.createSpan({
+                text: "PDF\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u6709\u52B9\u306B\u3059\u308B\u3068\u77E9\u5F62\u3092\u8868\u793A\u3067\u304D\u307E\u3059\u3002",
+                cls: "sr-mastery-caption"
+              });
+            }
+            const jump = fig.createEl("button", {
+              cls: "akebi-pdf-rect-source",
+              text: "\u914D\u5E03\u8CC7\u6599\u306E\u8A72\u5F53\u7BC4\u56F2\u3092\u958B\u304F \u2197"
+            });
+            jump.type = "button";
+            jump.setAttribute("aria-label", "PDF\u306E" + ref.page + "\u30DA\u30FC\u30B8\u306E\u77E9\u5F62\u3092\u958B\u304F");
+            jump.addEventListener("click", () => {
+              void Promise.resolve(this.app.workspace?.openLinkText?.(
+                resolved.file.path + ref.fragment,
+                card.source,
+                true
+              )).catch((error) => new Notice2("PDF\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\uFF1A" + String(error?.message || error)));
+            });
+          } else {
+            const open = fig.createEl("button", { cls: "akebi-card-image-link" });
+            open.type = "button";
+            open.setAttribute("aria-label", "Vault\u5185\u306E\u753B\u50CF\u3092\u958B\u304F\uFF1A" + (ref.alt || ref.path));
+            open.title = ref.link + " \xB7 \u30BF\u30C3\u30D7\u3057\u3066\u5143\u753B\u50CF\u3092\u958B\u304F";
+            const image = open.createEl("img");
+            image.alt = ref.alt || resolved.file.basename || "\u554F\u984C\u306E\u56F3";
+            image.draggable = false;
+            image.src = this.app.vault.getResourcePath(resolved.file);
+            open.addEventListener("click", () => {
+              void Promise.resolve(this.app.workspace?.openLinkText?.(
+                resolved.file.path,
+                card.source,
+                true
+              )).catch((error) => new Notice2("\u753B\u50CF\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\uFF1A" + String(error?.message || error)));
+            });
+          }
           if (ref.alt) fig.createEl("figcaption", { text: ref.alt });
         }
       },
@@ -722,7 +801,7 @@ var require_media = __commonJS({
           const ref = localImage2(raw);
           const file = resolveImage(this.app, card, raw)?.file;
           if (!file) throw Error("Vault\u5185\u753B\u50CF\u3092\u89E3\u6C7A\u3067\u304D\u307E\u305B\u3093\uFF1A" + ref.path);
-          return { link: "![[" + file.path + "]]", alt: ref.alt, showOn: ref.showOn };
+          return { link: imageWithPath(ref, file.path), alt: ref.alt, showOn: ref.showOn };
         });
         await this.app.vault.process(note, (text) => patchImages(text, card, clean));
         card.images = clean;
@@ -732,7 +811,7 @@ var require_media = __commonJS({
         if (!card || this.screen !== "study") return;
         const section = layer.createEl("details", { cls: "akebi-image-editor" });
         section.createEl("summary", { text: "\u3053\u306E\u554F\u984C\u306E\u753B\u50CF\u30EA\u30F3\u30AF" });
-        section.createEl("p", { text: "\u753B\u50CF\u306F4\u629E\u30FB\u89E3\u8AAC\u3068\u540C\u3058\u554F\u984C\u306E\u30C7\u30FC\u30BF\u306B\u4FDD\u5B58\u3002\u5225\u306E\u554F\u984C\u304B\u3089\u540C\u3058Vault\u753B\u50CF\u3092\u518D\u5229\u7528\u3067\u304D\u307E\u3059\u3002", cls: "sr-mastery-caption" });
+        section.createEl("p", { text: "\u753B\u50CF\u307E\u305F\u306FPDF++\u306E\u77E9\u5F62\u7BC4\u56F2\u3092\u30B3\u30D4\u30FC\u3057\u305Frect\u30EA\u30F3\u30AF\uFF08#page=...&rect=...\uFF09\u3092\u8CBC\u308A\u4ED8\u3051\u3089\u308C\u307E\u3059\u3002", cls: "sr-mastery-caption" });
         const items = section.createDiv();
         const refresh = () => {
           items.replaceChildren();
@@ -756,7 +835,7 @@ var require_media = __commonJS({
         const label = section.createEl("label", { text: "Vault\u5185\u306E\u753B\u50CF\u30EA\u30F3\u30AF" });
         const input = label.createEl("input");
         input.type = "text";
-        input.placeholder = "![[attachments/\u7D30\u80DE\u819C.png]]";
+        input.placeholder = "![[\u751F\u7269\u5B66_\u914D\u5E03.pdf#page=3&rect=100,80,850,440&width=450]]";
         input.setAttribute("aria-label", "\u753B\u50CF\u30EA\u30F3\u30AF");
         const phaseLabel = section.createEl("label", { text: "\u8868\u793A\u30BF\u30A4\u30DF\u30F3\u30B0" });
         const phase = phaseLabel.createEl("select");
@@ -774,6 +853,28 @@ var require_media = __commonJS({
             new Notice2(String(error.message || error));
           } finally {
             add.disabled = false;
+          }
+        });
+        const clip = section.createEl("button", { text: "PDF++\u3067\u30B3\u30D4\u30FC\u3057\u305F\u77E9\u5F62\u3092\u8CBC\u308A\u4ED8\u3051" });
+        clip.addEventListener("click", async () => {
+          try {
+            clip.disabled = true;
+            const clipboard = layer.ownerDocument?.defaultView?.navigator?.clipboard;
+            if (typeof clipboard?.readText !== "function")
+              throw Error("\u3053\u306E\u7AEF\u672B\u3067\u306F\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9\u306E\u76F4\u63A5\u8AAD\u307F\u53D6\u308A\u304C\u4F7F\u3048\u307E\u305B\u3093\u3002\u30EA\u30F3\u30AF\u6B04\u3078\u8CBC\u308A\u4ED8\u3051\u3066\u304F\u3060\u3055\u3044\u3002");
+            const text = (await clipboard.readText()).trim();
+            const fragment = localImage2(text);
+            if (fragment?.kind !== "pdf-rect")
+              throw Error("PDF++\u306E\u77E9\u5F62\u9078\u629E\u30EA\u30F3\u30AF\uFF08#page=...&rect=...\uFF09\u3092\u30B3\u30D4\u30FC\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+            await this._saveCardImages(card, [
+              ...card.images || [],
+              { link: fragment.link, alt: fragment.alt, showOn: phase.value }
+            ]);
+            refresh();
+          } catch (error) {
+            new Notice2(String(error.message || error));
+          } finally {
+            clip.disabled = false;
           }
         });
         const pick = section.createEl("button", { text: "Vault\u304B\u3089\u753B\u50CF\u3092\u9078\u3076" });
@@ -799,7 +900,7 @@ var require_media = __commonJS({
         });
       }
     };
-    module2.exports = { EXTENSIONS: EXTENSIONS2, localImage: localImage2, storedImage, patchImages, rewriteImageLinksInMarkdown: rewriteImageLinksInMarkdown2, resolveImage, mediaUI };
+    module2.exports = { EXTENSIONS, MEDIA_EXTENSIONS: MEDIA_EXTENSIONS2, localImage: localImage2, storedImage, patchImages, rewriteImageLinksInMarkdown: rewriteImageLinksInMarkdown2, resolveImage, mediaUI };
   }
 });
 
@@ -2224,7 +2325,7 @@ var require_dialogs = __commonJS({
   "src/dialogs.js"(exports2, module2) {
     "use strict";
     var { Modal, FuzzySuggestModal, Notice: Notice2 } = require("obsidian");
-    var { EXTENSIONS: EXTENSIONS2 } = require_media();
+    var { EXTENSIONS } = require_media();
     var { tagLabel, defaultLabel } = require_taxonomy();
     var ImagePicker = class extends FuzzySuggestModal {
       constructor(app, done) {
@@ -2233,7 +2334,7 @@ var require_dialogs = __commonJS({
         this.setPlaceholder("Vault\u5185\u306E\u753B\u50CF\u3092\u9078\u3076");
       }
       getItems() {
-        return this.app.vault.getFiles().filter((f) => EXTENSIONS2.has(f.extension?.toLowerCase()));
+        return this.app.vault.getFiles().filter((f) => EXTENSIONS.has(f.extension?.toLowerCase()));
       }
       getItemText(file) {
         return file.path;
@@ -2315,7 +2416,7 @@ var require_dialogs = __commonJS({
 var { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require("obsidian");
 var { AkebiStudyModal } = require_study();
 var { TagNamesModal, pickImage } = require_dialogs();
-var { EXTENSIONS, localImage, rewriteImageLinksInMarkdown } = require_media();
+var { MEDIA_EXTENSIONS, localImage, rewriteImageLinksInMarkdown } = require_media();
 var { excludedPath } = require_taxonomy();
 var DEFAULTS = Object.freeze({
   recallLimitSeconds: 10,
@@ -2406,7 +2507,7 @@ var Akebi = class extends Plugin {
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (!file || !oldPath) return;
       if (file.extension === "md") void this.handleRename(file.path, oldPath);
-      else if (EXTENSIONS.has((file.extension || "").toLowerCase()))
+      else if (MEDIA_EXTENSIONS.has((file.extension || "").toLowerCase()))
         this.queueImageRename(oldPath, file.path);
     }));
   }
@@ -2562,7 +2663,7 @@ var Akebi = class extends Plugin {
         return {
           ...item,
           path: void 0,
-          link: "![[" + newPath + "]]",
+          link: "![[" + newPath + (link.fragment || "") + "]]",
           showOn: link.showOn,
           alt: link.alt
         };

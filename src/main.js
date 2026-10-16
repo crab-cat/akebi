@@ -2,7 +2,7 @@
 const { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require('obsidian');
 const { AkebiStudyModal } = require('./study');
 const {TagNamesModal,pickImage}=require('./dialogs');
-const {EXTENSIONS,localImage,rewriteImageLinksInMarkdown}=require('./media');
+const {MEDIA_EXTENSIONS,localImage,rewriteImageLinksInMarkdown}=require('./media');
 const {excludedPath}=require('./taxonomy');
 
 const DEFAULTS = Object.freeze({
@@ -65,7 +65,7 @@ class Akebi extends Plugin {
     this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{
       if(!file || !oldPath)return;
       if(file.extension==='md')void this.handleRename(file.path,oldPath);
-      else if(EXTENSIONS.has((file.extension||'').toLowerCase()))
+      else if(MEDIA_EXTENSIONS.has((file.extension||'').toLowerCase()))
         this.queueImageRename(oldPath,file.path);
     }));
   }
@@ -192,7 +192,7 @@ class Akebi extends Plugin {
       card.images=card.images.map(item=>{
         const link=localImage(item);
         if(!link || (link.path!==oldPath && !(allowBasename&&link.path===oldName)))return item;
-        return {...item,path:undefined,link:'![['+newPath+']]',
+        return {...item,path:undefined,link:'![['+newPath+(link.fragment||'')+']]',
           showOn:link.showOn,alt:link.alt};
       });
     }

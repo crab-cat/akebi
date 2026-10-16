@@ -1,11 +1,12 @@
 'use strict';
-const {Notice}=require('obsidian');
+const {Notice,MarkdownRenderer}=require('obsidian');
 const EXTENSIONS=new Set(['png','jpg','jpeg','webp','gif','avif']);
+const MEDIA_EXTENSIONS=new Set([...EXTENSIONS,'pdf']);
 const META=/^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/;
 
 function localImage(value){
   const raw=typeof value==='string'?{link:value}:value;
-  if(!raw || typeof raw!=='object')return null;
+  if(!raw||typeof raw!=='object')return null;
   const original=(typeof raw.link==='string'?raw.link:raw.path);
   if(typeof original!=='string')return null;
   const input=original.trim();
@@ -13,15 +14,42 @@ function localImage(value){
   if((input.startsWith('![')||input.startsWith('[['))&&!embedded)return null;
   const pieces=embedded?embedded[1].split('|'):[input];
   if(pieces.length>2)return null;
-  const path=pieces[0].trim();
-  if(!path || path.startsWith('/') || /[:\\\r\n\0?#\[\]|]/.test(path) ||
-    path.split('/').some(x=>!x||x==='.'||x==='..') ||
-    !EXTENSIONS.has(path.split('.').pop().toLowerCase()))return null;
+  const target=pieces[0].trim();
+  const hashAt=target.indexOf('#');
+  const path=(hashAt<0?target:target.slice(0,hashAt)).trim();
+  const ext=path.split('.').pop().toLowerCase();
+  if(!path||path.startsWith('/')||/[:\\\r\n\0?#\[\]|]/.test(path)||
+     path.split('/').some(x=>!x||x==='.'||x==='..')||
+     !MEDIA_EXTENSIONS.has(ext))return null;
   const alt=typeof raw.alt==='string'&&raw.alt.trim()?raw.alt.trim():(pieces[1]||'').trim();
   if(/[\r\n]/.test(alt))return null;
-  return {link:'![['+path+']]',path,alt:alt.slice(0,200),
+  let fragment='',page=null,rect=null,width=null;
+  const isPdf=ext==='pdf';
+  if(isPdf){
+    if(hashAt<0)return null;
+    const params=target.slice(hashAt+1).split('&'),seen=new Set();
+    const values={};
+    for(const param of params){
+      const k=param.indexOf('=');
+      if(k<1)return null;
+      const key=param.slice(0,k),val=param.slice(k+1);
+      if(!['page','rect','width'].includes(key)||seen.has(key))return null;
+      seen.add(key);values[key]=val;
+    }
+    const p=Number(values.page);
+    const r=values.rect?.split(',').map(Number);
+    if(!Number.isInteger(p)||p<1||p>50000 || !Array.isArray(r)||r.length!==4 ||
+       r.some(n=>!Number.isFinite(n)||n<0||n>30000) || !(r[0]<r[2]&&r[1]<r[3]))return null;
+    const w=values.width===undefined?450:Number(values.width);
+    if(!Number.isInteger(w)||w<120||w>1200)return null;
+    page=p;rect=r;width=w;
+    fragment='#page='+p+'&rect='+r.map(n=>String(n)).join(',')+'&width='+w;
+  }else if(hashAt>=0)return null;
+  return {kind:isPdf?'pdf-rect':'image',link:'![['+path+fragment+']]',path,fragment,
+    page,rect,width,alt:alt.slice(0,200),
     showOn:raw.showOn==='answer'?'answer':'question'};
 }
+function imageWithPath(ref,path){return '![['+path+(ref.fragment||'')+']]';}
 function storedImage(image){
   const data=localImage(image);
   return data?{link:data.link,alt:data.alt,showOn:data.showOn}:null;
@@ -55,8 +83,9 @@ function patchImages(markdown,card,images){
   return lines.join(newline);
 }
 function rewriteImageLinksInMarkdown(markdown,oldPath,newPath,allowBasename=false){
-  const renamed=localImage({path:newPath});
-  if(!renamed)return markdown;
+  if(typeof newPath!=='string' || newPath.startsWith('/') ||
+    newPath.split('/').some(part=>!part||part==='.'||part==='..') ||
+    !MEDIA_EXTENSIONS.has(newPath.split('.').pop().toLowerCase()))return markdown;
   const oldName=oldPath.split('/').pop();
   const newline=markdown.includes('\r\n')?'\r\n':'\n',lines=markdown.split(/\r?\n/);
   let changed=false;
@@ -72,7 +101,7 @@ function rewriteImageLinksInMarkdown(markdown,oldPath,newPath,allowBasename=fals
       if(!current)return original;
       if(current.path!==oldPath && !(allowBasename && current.path===oldName))return original;
       rewritten=true;
-      return {...storedImage(original),link:renamed.link};
+      return {...storedImage(original),link:imageWithPath(current,newPath)};
     });
     if(rewritten){
       lines[i]=found[1]+'%%'+found[2]+' '+JSON.stringify(meta)+'%%';
@@ -87,7 +116,7 @@ function resolveImage(app,card,raw){
   const exact=app?.vault?.getAbstractFileByPath?.(ref.path);
   const linked=app?.metadataCache?.getFirstLinkpathDest?.(ref.path,card?.source||'');
   const file=exact?.extension?exact:linked;
-  return file&&EXTENSIONS.has((file.extension||'').toLowerCase())?{ref,file}:null;
+  return file&&MEDIA_EXTENSIONS.has((file.extension||'').toLowerCase())?{ref,file}:null;
 }
 const mediaUI={
   _renderCardImages(parent,card,phase){
@@ -100,17 +129,48 @@ const mediaUI={
         fig.createEl('span',{text:'Vault内画像の同期・リンクを確認：'+ref.path,cls:'sr-mastery-caption'});
         continue;
       }
-      const open=fig.createEl('button',{cls:'akebi-card-image-link'});
-      open.type='button';
-      open.setAttribute('aria-label','Vault内の画像を開く：'+(ref.alt||ref.path));
-      open.title=ref.link+' · タップして元画像を開く';
-      const image=open.createEl('img');
-      image.alt=ref.alt||resolved.file.basename||'問題の図';
-      image.draggable=false;image.src=this.app.vault.getResourcePath(resolved.file);
-      open.addEventListener('click',()=>{
-        void Promise.resolve(this.app.workspace?.openLinkText?.(resolved.file.path,card.source,true))
-          .catch(error=>new Notice('画像を開けませんでした：'+String(error?.message||error)));
-      });
+      if(ref.kind==='pdf-rect'){
+        fig.classList.add('akebi-card-pdf-rect');
+        const region=fig.createDiv({cls:'akebi-pdf-rect-embed'});
+        // PDF++ renders native PDF rectangle embeds; no raster copy is created.
+        const renderer=MarkdownRenderer?.renderMarkdown;
+        if(typeof renderer==='function'){
+          void Promise.resolve(renderer.call(MarkdownRenderer,
+              ref.link,region,card.source||'',this.owner||this))
+            .catch(error=>{
+              region.replaceChildren();
+              region.createSpan({text:'PDFの矩形を表示できません：'+ref.path,
+                cls:'sr-mastery-caption'});
+              console.warn('akebi PDF rect render',error);
+            });
+        }else{
+          region.createSpan({text:'PDFプレビューを有効にすると矩形を表示できます。',
+            cls:'sr-mastery-caption'});
+        }
+        const jump=fig.createEl('button',{
+          cls:'akebi-pdf-rect-source',text:'配布資料の該当範囲を開く ↗'});
+        jump.type='button';
+        jump.setAttribute('aria-label','PDFの'+ref.page+'ページの矩形を開く');
+        jump.addEventListener('click',()=>{
+          void Promise.resolve(this.app.workspace?.openLinkText?.(
+            resolved.file.path+ref.fragment,card.source,true))
+            .catch(error=>new Notice('PDFを開けませんでした：'+String(error?.message||error)));
+        });
+      }else{
+        const open=fig.createEl('button',{cls:'akebi-card-image-link'});
+        open.type='button';
+        open.setAttribute('aria-label','Vault内の画像を開く：'+(ref.alt||ref.path));
+        open.title=ref.link+' · タップして元画像を開く';
+        const image=open.createEl('img');
+        image.alt=ref.alt||resolved.file.basename||'問題の図';
+        image.draggable=false;
+        image.src=this.app.vault.getResourcePath(resolved.file);
+        open.addEventListener('click',()=>{
+          void Promise.resolve(this.app.workspace?.openLinkText?.(
+            resolved.file.path,card.source,true))
+            .catch(error=>new Notice('画像を開けませんでした：'+String(error?.message||error)));
+        });
+      }
       if(ref.alt)fig.createEl('figcaption',{text:ref.alt});
     }
   },
@@ -123,7 +183,7 @@ const mediaUI={
       const ref=localImage(raw);
       const file=resolveImage(this.app,card,raw)?.file;
       if(!file)throw Error('Vault内画像を解決できません：'+ref.path);
-      return {link:'![['+file.path+']]',alt:ref.alt,showOn:ref.showOn};
+      return {link:imageWithPath(ref,file.path),alt:ref.alt,showOn:ref.showOn};
     });
     await this.app.vault.process(note,text=>patchImages(text,card,clean));
     card.images=clean;
@@ -133,7 +193,7 @@ const mediaUI={
     if(!card||this.screen!=='study')return;
     const section=layer.createEl('details',{cls:'akebi-image-editor'});
     section.createEl('summary',{text:'この問題の画像リンク'});
-    section.createEl('p',{text:'画像は4択・解説と同じ問題のデータに保存。別の問題から同じVault画像を再利用できます。',cls:'sr-mastery-caption'});
+    section.createEl('p',{text:'画像またはPDF++の矩形範囲をコピーしたrectリンク（#page=...&rect=...）を貼り付けられます。',cls:'sr-mastery-caption'});
     const items=section.createDiv();
     const refresh=()=>{
       items.replaceChildren();
@@ -152,7 +212,7 @@ const mediaUI={
     refresh();
     const label=section.createEl('label',{text:'Vault内の画像リンク'});
     const input=label.createEl('input');
-    input.type='text';input.placeholder='![[attachments/細胞膜.png]]';
+    input.type='text';input.placeholder='![[生物学_配布.pdf#page=3&rect=100,80,850,440&width=450]]';
     input.setAttribute('aria-label','画像リンク');
     const phaseLabel=section.createEl('label',{text:'表示タイミング'});
     const phase=phaseLabel.createEl('select');
@@ -167,6 +227,23 @@ const mediaUI={
         input.value='';refresh();
       }catch(error){new Notice(String(error.message||error));}
       finally{add.disabled=false;}
+    });
+    const clip=section.createEl('button',{text:'PDF++でコピーした矩形を貼り付け'});
+    clip.addEventListener('click',async()=>{
+      try{
+        clip.disabled=true;
+        const clipboard=layer.ownerDocument?.defaultView?.navigator?.clipboard;
+        if(typeof clipboard?.readText!=='function')
+          throw Error('この端末ではクリップボードの直接読み取りが使えません。リンク欄へ貼り付けてください。');
+        const text=(await clipboard.readText()).trim();
+        const fragment=localImage(text);
+        if(fragment?.kind!=='pdf-rect')
+          throw Error('PDF++の矩形選択リンク（#page=...&rect=...）をコピーしてください。');
+        await this._saveCardImages(card,[...(card.images||[]),
+          {link:fragment.link,alt:fragment.alt,showOn:phase.value}]);
+        refresh();
+      }catch(error){new Notice(String(error.message||error));}
+      finally{clip.disabled=false;}
     });
     const pick=section.createEl('button',{text:'Vaultから画像を選ぶ'});
     pick.addEventListener('click',async()=>{
@@ -183,4 +260,4 @@ const mediaUI={
     });
   }
 };
-module.exports={EXTENSIONS,localImage,storedImage,patchImages,rewriteImageLinksInMarkdown,resolveImage,mediaUI};
+module.exports={EXTENSIONS,MEDIA_EXTENSIONS,localImage,storedImage,patchImages,rewriteImageLinksInMarkdown,resolveImage,mediaUI};
