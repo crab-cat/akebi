@@ -48,7 +48,12 @@ A timeout records a failed answer **before** showing feedback. Closing the scree
 
 ## Review model
 
-This release retains a response-time-weighted evidence model and a power-law forgetting curve inspired by the published FSRS curve. **It is not a trained FSRS implementation and does not claim calibrated recall probabilities.** Stability updates and the review target are provisional, adjustable design parameters. Elapsed time alone does not invent an incorrect answer or reduce historical correct counts. The independent study interface no longer hooks or modifies Spaced Repetition's UI.
+This release retains a response-time-weighted evidence model and a power-law forgetting curve inspired by the published FSRS curve. **It is not a trained FSRS implementation and does not claim calibrated recall probabilities.** Stability updates and the review target are provisional, adjustable design parameters. Elapsed time alone does not invent an incorrect answer or reduce historical correct counts.
+
+**Passive forgetting presentation (v0.8.5):** Akebi now converts its time-dependent recall estimate into a *display-only* level. Once estimated retrievability falls below the 86% review target, a previously Perfect card appears as Known. At or below **65%** (configurable from 55% to 80% under Settings → Akebi), previously Known/Perfect cards appear as **Weak (inferred forgotten)**. The weak filter, circular stats and review recommendation reflect this projected state; lower predicted recall is shown first in due/weak practice.
+
+The screen distinguishes inferred forgetting from a real wrong answer: the historical Ease, correct count, mistake count and review timestamp remain **unchanged until an actual review**. A fresh successful review can restore confidence and stretch stability. Cards that have never been studied or lack valid review-time data are not classified as forgotten from thin air. These thresholds use an **uncalibrated estimate**, not a diagnosis of what the user can recall.
+ The independent study interface no longer hooks or modifies Spaced Repetition's UI.
 
 Reference for the forgetting-curve shape: [FSRS algorithm](https://github.com/open-spaced-repetition/awesome-fsrs/wiki/The-Algorithm). No runtime package or code from the original Spaced Repetition plugin is bundled here.
 

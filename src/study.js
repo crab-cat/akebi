@@ -183,6 +183,29 @@ function studyMemoryState(record, nowMs = Date.now()) {
   };
 }
 
+// Presentation-only forgetting estimate. Ease and past outcomes are durable
+// evidence, while R(t) is a time-dependent (uncalibrated) recall prediction.
+// A card may *look* weak without receiving any artificial FAIL evidence.
+const STUDY_INFERRED_WEAK_DEFAULT = 0.65;
+function studyDisplayLevel(record, fallback, nowMs = Date.now(),
+    threshold = STUDY_INFERRED_WEAK_DEFAULT) {
+  const saved = STUDY_LEVELS.includes(record?.stage) ? record.stage
+    : STUDY_LEVELS.includes(fallback) ? fallback : "unseen";
+  const unchanged = { stage: saved, inferredWeak: false, retrievability: null };
+  // Unseen and actually failed cards must not be reclassified by time alone.
+  if (!record || (saved !== "known" && saved !== "perfect")) return unchanged;
+  const memory = studyMemoryState(record, nowMs);
+  const r = memory?.retrievability;
+  if (!Number.isFinite(r) || r < 0 || r > 1) return unchanged;
+  const cutoff = Number.isFinite(threshold)
+    ? studyClamp(threshold, 0.55, 0.80) : STUDY_INFERRED_WEAK_DEFAULT;
+  if (r <= cutoff) return { stage: "weak", inferredWeak: true, retrievability: r };
+  if (saved === "perfect" && memory.due) {
+    return { stage: "known", inferredWeak: false, retrievability: r };
+  }
+  return { stage: saved, inferredWeak: false, retrievability: r };
+}
+
 function studyUpdateMemory(before, correct, options, timestamp) {
   const when = Date.parse(timestamp);
   const nowMs = Number.isFinite(when) ? when : Date.now();
@@ -548,16 +571,23 @@ class AkebiStudyModal extends Modal {
     this.owner._knownTagPaths=[...new Set([...this._tree.keys(),...observedTags])].filter(Boolean);
   }
 
-  _level(card, nowMs = Date.now()) {
-    // "Perfect" represents learned strength. Once predicted recall
-    // reaches the review threshold, surface it as "Known" again without
-    // mutating the stored Ease, historical successes or native SR data.
+  _displayLevel(card, nowMs = Date.now()) {
     const record = this.owner._mastery?.[card.id];
-    const level = record?.stage || (card.studied ? "known" : "unseen");
-    if (level === "perfect" && studyMemoryState(record, nowMs)?.due) {
-      return "known";
-    }
-    return level;
+    return studyDisplayLevel(record, card.studied ? "known" : "unseen",
+      nowMs, this.owner.settings?.inferredWeakThreshold);
+  }
+
+  _level(card, nowMs = Date.now()) {
+    return this._displayLevel(card, nowMs).stage;
+  }
+
+  _renderForgettingHint(parent, card) {
+    const state = this._displayLevel(card);
+    if (!state.inferredWeak) return;
+    parent.createEl("p", { cls: "sr-mastery-caption akebi-forgetting-hint",
+      text: "そろそろ忘れているかも · 推定想起率 " +
+        Math.round(100 * state.retrievability) +
+        "%（苦手として復習。過去のEase・正解数はそのまま）" });
   }
 
   _isDue(card, nowMs = Date.now()) {
@@ -565,9 +595,9 @@ class AkebiStudyModal extends Modal {
     return record ? !!studyMemoryState(record, nowMs)?.due : !!(card.nativeDue && Date.parse(card.nativeDue) <= nowMs);
   }
 
-  _stats(cards) {
+  _stats(cards, nowMs = Date.now()) {
     const result = { unseen: 0, weak: 0, known: 0, perfect: 0 };
-    for (const card of cards) result[this._level(card)]++;
+    for (const card of cards) result[this._level(card, nowMs)]++;
     return result;
   }
 
@@ -626,6 +656,7 @@ class AkebiStudyModal extends Modal {
     this._cancelSentenceDrag?.();this.current=null;this._stopPronunciation();this._stopCelebration();
     void this.owner._flushMastery?.();
     this.screen='home';this.modalEl.classList.remove('sr-mastery-timeout-mode');this.main.replaceChildren();
+    const nowMs = Date.now(); // Same instant for chart counts and estimated weak stage.
     if(!this._tree){this._tree=makeTree(this.cards);this._cardIndex=new Map(this.cards.map(c=>[c.id,c]));}
     if(!this._tree.has(this.selectedDeck))this.selectedDeck='';
     const crumb=this.main.createDiv({cls:'akebi-breadcrumb'});
@@ -634,7 +665,7 @@ class AkebiStudyModal extends Modal {
     for(let i=0;i<parts.length;i++){
       crumb.createSpan({text:'›',cls:'akebi-crumb-separator'});
       const path=parts.slice(0,i+1).join('/');const b=crumb.createEl('button',{cls:'akebi-crumb-node'});
-      this._renderDonut(b,this._stats(this._nodeCards(path)),true);
+      this._renderDonut(b,this._stats(this._nodeCards(path),nowMs),true);
       b.createSpan({text:this._tagTitle(path)});b.addEventListener('click',()=>this._goDeck(path));
     }
     if(this.invalidSentenceCount)this.main.createEl('p',{text:this.invalidSentenceCount+'問の文組み立てを保留中。設定の検査から確認できます。',cls:'sr-mastery-caption'});
@@ -644,7 +675,7 @@ class AkebiStudyModal extends Modal {
       const grid=this.main.createDiv({cls:'akebi-deck-tree'});
       for(const path of children){
         const cards=this._nodeCards(path);const button=grid.createEl('button',{cls:'akebi-deck-node'});
-        button.setAttribute('data-deck',path);this._renderDonut(button,this._stats(cards),true);
+        button.setAttribute('data-deck',path);this._renderDonut(button,this._stats(cards,nowMs),true);
         const text=button.createDiv({cls:'akebi-deck-text'});
         text.createSpan({text:this._tagTitle(path),cls:'akebi-deck-name'});
         text.createSpan({text:cards.length+'問',cls:'sr-mastery-caption'});
@@ -655,13 +686,19 @@ class AkebiStudyModal extends Modal {
     }
     if(!this.selectedDeck){this.main.createEl('p',{text:'ノートに #flashcards/university/biology のようなタグを付けるとデッキが現れます。',cls:'sr-mastery-caption'});return;}
     const cards=children.length?this._nodeCards(this.selectedDeck,true):this._nodeCards(this.selectedDeck);
-    const stats=this._stats(cards);
+    const stats=this._stats(cards,nowMs);
     const overview=this.main.createDiv({cls:'sr-mastery-overview'});this._renderDonut(overview,stats);
     const info=overview.createDiv({cls:'sr-mastery-overview-detail'});
     info.createEl('strong',{text:this._tagTitle(this.selectedDeck)+' · '+cards.length+'問'});
     const legend=info.createDiv({cls:'sr-mastery-legend'});
     for(const level of STUDY_LEVELS){const item=legend.createSpan({cls:'sr-mastery-legend-item'});item.createSpan({cls:'sr-mastery-legend-dot is-'+level});item.createSpan({text:STUDY_LABELS[level]+' '+stats[level]});}
-    const due=cards.filter(c=>this._isDue(c));
+    const inferredWeak = cards.filter(c=>this._displayLevel(c,nowMs).inferredWeak).length;
+    if(inferredWeak){
+      const cutoff=Math.round(100*(this.owner.settings?.inferredWeakThreshold ?? STUDY_INFERRED_WEAK_DEFAULT));
+      info.createEl("p", { cls: "sr-mastery-caption akebi-forgetting-hint",
+        text: "そろそろ忘れてるかも："+inferredWeak+"問（推定想起率"+cutoff+"%以下）。「苦手」に含めています。Ease・正誤回数は減らしません。" });
+    }
+    const due=cards.filter(c=>this._isDue(c,nowMs));
     if(due.length){const b=this.main.createEl('button',{text:'復習推奨 '+due.length+'問 ›',cls:'sr-mastery-due-start'});b.addEventListener('click',()=>this._start(due,true));}
     const stages=this.main.createDiv({cls:'sr-mastery-stats'});
     for(const level of ['unseen','weak','known','all','perfect']){
@@ -703,12 +740,27 @@ class AkebiStudyModal extends Modal {
     this.repSeen = new Set();this.repGraded=new Set();
     // Across new sessions, choose never-studied or oldest-reviewed
     // cards first; avoid offering the same recently answered subset.
-    const reviewStamp = card => {
-      const stamp = this.owner._mastery?.[card.id]?.lastReviewedAt;
-      const date = stamp ? Date.parse(stamp) : NaN;
-      return Number.isFinite(date) ? date : 0;
-    };
-    this.queue.sort((a, b) => reviewStamp(a) - reviewStamp(b));
+    // Sort large vocab decks using one memory calculation per card.
+    const prioritized = ignoreStage || this.selectedStage === "weak";
+    const nowMs = Date.now();
+    const order = new Map();
+    for (const card of this.queue) {
+      const record = this.owner._mastery?.[card.id];
+      const stamp = record?.lastReviewedAt ? Date.parse(record.lastReviewedAt) : NaN;
+      const r = prioritized ? studyMemoryState(record, nowMs)?.retrievability : null;
+      order.set(card.id, {
+        stamp: Number.isFinite(stamp) ? stamp : 0,
+        risk: Number.isFinite(r) && r >= 0 && r <= 1 ? r : 2
+      });
+    }
+    this.queue.sort((a, b) => {
+      const aa=order.get(a.id), bb=order.get(b.id);
+      if (prioritized) {
+        const risk = aa.risk - bb.risk;
+        if (risk) return risk;
+      }
+      return aa.stamp - bb.stamp;
+    });
     this.sessionStats = { attempted: 0, correct: 0 };
     this.repHistory = [];
     this.rep = {
@@ -1101,10 +1153,13 @@ class AkebiStudyModal extends Modal {
     const row = this.main.createDiv({ cls: "sr-mastery-card-info" });
     row.createSpan({ text: q.card.deck });
     const state = this.owner._mastery?.[q.card.id];
+    const displayed = this._displayLevel(q.card);
     row.createSpan({
-      text: STUDY_LABELS[this._level(q.card)] +
+      text: STUDY_LABELS[displayed.stage] +
+        (displayed.inferredWeak ? "（忘却推定）" : "") +
         (Number.isFinite(state?.ease) ? " · Ease " + state.ease : "")
     });
+    if(q.state==="front")this._renderForgettingHint(this.main,q.card);
     if (this.rep) {
       this.main.createEl("p", { cls: "sr-mastery-rep-progress",
         text: "Rep " + this.rep.number + " · " + this.rep.attempted + "/" + this.rep.size + " 回答" });
@@ -1535,4 +1590,4 @@ class AkebiStudyModal extends Modal {
 
 Object.assign(AkebiStudyModal.prototype, require('./phrase-ui'),require('./media').mediaUI);
 
-module.exports = { AkebiStudyModal, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, reviewKey, excludedPath, makeTree, tagLabel };
+module.exports = { AkebiStudyModal, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, studyDisplayLevel, reviewKey, excludedPath, makeTree, tagLabel };

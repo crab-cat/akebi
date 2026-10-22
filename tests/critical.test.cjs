@@ -299,3 +299,93 @@ test('PDF++ rect links render the original lecture rectangle, preserve SR and su
  assert.equal(pdfRegion.dataset.akebiChildState,'unloaded','previous PDF++ child must be destroyed on rerender');
  h.close();
 });
+
+test('passive forgetting demotes perfect → known → estimated weak, without grading or mutating Ease',()=>{
+ const h=harness(),{api}=h;
+ const day=86400000,start=Date.parse('2026-10-01T12:00:00Z');
+ const record={
+   modelVersion:2,stage:'perfect',ease:93,attempts:12,correct:12,mistakes:0,
+   lastWasCorrect:true,lastReviewedAt:new Date(start).toISOString(),
+   memory:{version:1,stabilityDays:1.0,dueAt:new Date(start+2*day).toISOString(),
+     reviewLog:[{observed:1,responseMs:500}]},
+   evidence:{alpha:15,beta:1.5}
+ };
+ const untouched=JSON.stringify(record);
+ const get=(d,r=record,t=0.65)=>
+   api.studyDisplayLevel(r,'unseen',start+d*day,t);
+ assert.equal(get(0).stage,'perfect');
+ assert.equal(get(2).stage,'known');
+ assert.equal(get(2).inferredWeak,false);
+ assert.equal(get(14).stage,'known');
+ assert.equal(get(16).stage,'weak');
+ assert.equal(get(16).inferredWeak,true);
+ assert(get(16).retrievability<=0.65);
+ assert.equal(get(10,record,0.70).stage,'weak');
+ assert.equal(get(10,record,0.60).stage,'known');
+ assert.equal(get(16,{...record,stage:'known'}).stage,'weak');
+ assert.equal(get(16,{...record,stage:'weak'}).inferredWeak,false);
+ assert.equal(api.studyDisplayLevel(null,'unseen',start+100*day).stage,'unseen');
+ assert.equal(api.studyDisplayLevel(null,'known',start+100*day).stage,'known');
+ assert.equal(get(100,{...record,lastReviewedAt:'invalid'}).stage,'perfect');
+ assert.equal(get(100,{...record,lastReviewedAt:null}).stage,'perfect');
+ assert.equal(JSON.stringify(record),untouched,'historical Ease, evidence and scores are immutable');
+ h.close();
+});
+test('estimated weak is counted in donut/weak filter, ordered by recall risk, and shows a provisional hint',()=>{
+ const h=harness(),{api}=h,now=Date.now(),day=86400000;
+ const mk=(id,stage,days,s)=>({
+   id,legacyId:id,question:id,answer:id,course:'biology',genre:'university',
+   deck:'university/biology/terms',tagPaths:['university/biology/terms'],studied:true
+ });
+ const oldStrong=mk('oldStrong','perfect',20,10);
+ const recentForgotten=mk('recentForgotten','known',7,0.30);
+ const fresh=mk('fresh','perfect',1,10);
+ const unseen={...mk('unseen','unseen',0,0),studied:false};
+ const owner={
+   manifest:{version:'0.8.5'},
+   settings:{inferredWeakThreshold:0.65,repSize:2,selectedStudyStage:'weak',
+     recallLimitSeconds:8,studyMode:'slide',easyThresholdSeconds:2,
+     soundEnabled:false,sentenceLimitSeconds:120,selectedDeckTag:'university/biology/terms'},
+   _mastery:{},_curated:{},saveData:async()=>{},_flushMastery:async()=>true,
+   _saveMastery:()=>{throw Error('Passive inference may not write progress')}
+ };
+ const records={
+   oldStrong:{stage:'perfect',ease:95,attempts:8,correct:8,mistakes:0,
+     memory:{version:1,stabilityDays:10},lastReviewedAt:new Date(now-20*day).toISOString()},
+   recentForgotten:{stage:'known',ease:80,attempts:6,correct:6,mistakes:0,
+     memory:{version:1,stabilityDays:0.3},lastReviewedAt:new Date(now-7*day).toISOString()},
+   fresh:{stage:'perfect',ease:94,attempts:8,correct:8,mistakes:0,
+     memory:{version:1,stabilityDays:10},lastReviewedAt:new Date(now-day).toISOString()}
+ };
+ owner._mastery=records;
+ const prev=JSON.stringify(records);
+ const modal=new api.AkebiStudyModal({vault:{getAbstractFileByPath:()=>null}},owner);
+ modal._renderShell();
+ const cards=[oldStrong,recentForgotten,fresh,unseen];
+ modal.cards=cards;
+ modal.selectedDeck='university/biology/terms';
+ modal.selectedStage='weak';
+ modal._tree=api.makeTree(cards);modal._cardIndex=new Map(cards.map(c=>[c.id,c]));
+ assert.equal(modal._level(recentForgotten,now),'weak');
+ assert.equal(modal._level(oldStrong,now),'known');
+ assert.equal(modal._level(fresh,now),'perfect');
+ assert.equal(modal._level(unseen,now),'unseen');
+ assert.equal(modal._stats(cards,now).weak,1);
+ assert.equal(modal._selectionCards().map(c=>c.id).join(','),'recentForgotten');
+ modal._renderHome();
+ assert(modal.main.textContent.includes('忘れてるかも：1問'));
+ assert(modal.main.textContent.includes('Ease・正誤回数は減らしません'));
+ assert(modal.main.textContent.includes('苦手 1'));
+ assert.equal(modal._isDue(recentForgotten,now),true);
+ // Both are due; the newer but less stable card must be shown first.
+ owner._mastery.oldStrong.memory.stabilityDays=10; // R~0.84, just overdue
+ owner._mastery.recentForgotten.memory.stabilityDays=0.30; // R~0.62
+ assert.equal(modal._isDue(oldStrong,now),true);
+ modal._start([oldStrong,recentForgotten],true);
+ assert.equal(modal.current.card.id,'recentForgotten');
+ assert(modal.main.textContent.includes('忘れているかも'));
+ assert.equal(JSON.stringify(records).includes('attempts'),true);
+ // No grading: started study but no answer, so no new record.
+ assert.equal(owner._mastery.recentForgotten.attempts,6);
+ h.close();
+});

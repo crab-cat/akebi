@@ -133,6 +133,7 @@ const phraseUI={
     this.main.createEl('p',{text:(this._scopeLabel?.()||q.card.course||q.card.genre)+' · 関係性',cls:'sr-mastery-caption'});
     if(this.rep)this.main.createEl('p',{text:'Rep '+this.rep.number+' · '+this.rep.attempted+'/'+this.rep.size+' 回答',cls:'sr-mastery-rep-progress'});
     this.main.createEl('h3',{text:q.card.question,cls:'sr-sentence-question'});
+    if(q.state==='front')this._renderForgettingHint(this.main,q.card);
     this._renderCardImages?.(this.main,q.card,q.state==='front'?'question':'answer');
     if(q.state==='front'){
       if(!q.sentenceChunks)q.sentenceChunks=q.sentence.chunks.map(()=>[]);

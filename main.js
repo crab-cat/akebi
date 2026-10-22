@@ -501,6 +501,7 @@ var require_phrase_ui = __commonJS({
         this.main.createEl("p", { text: (this._scopeLabel?.() || q.card.course || q.card.genre) + " \xB7 \u95A2\u4FC2\u6027", cls: "sr-mastery-caption" });
         if (this.rep) this.main.createEl("p", { text: "Rep " + this.rep.number + " \xB7 " + this.rep.attempted + "/" + this.rep.size + " \u56DE\u7B54", cls: "sr-mastery-rep-progress" });
         this.main.createEl("h3", { text: q.card.question, cls: "sr-sentence-question" });
+        if (q.state === "front") this._renderForgettingHint(this.main, q.card);
         this._renderCardImages?.(this.main, q.card, q.state === "front" ? "question" : "answer");
         if (q.state === "front") {
           if (!q.sentenceChunks) q.sentenceChunks = q.sentence.chunks.map(() => []);
@@ -1069,6 +1070,21 @@ var require_study = __commonJS({
         due: elapsedDays >= dueDays
       };
     }
+    var STUDY_INFERRED_WEAK_DEFAULT = 0.65;
+    function studyDisplayLevel(record, fallback, nowMs = Date.now(), threshold = STUDY_INFERRED_WEAK_DEFAULT) {
+      const saved = STUDY_LEVELS.includes(record?.stage) ? record.stage : STUDY_LEVELS.includes(fallback) ? fallback : "unseen";
+      const unchanged = { stage: saved, inferredWeak: false, retrievability: null };
+      if (!record || saved !== "known" && saved !== "perfect") return unchanged;
+      const memory = studyMemoryState(record, nowMs);
+      const r = memory?.retrievability;
+      if (!Number.isFinite(r) || r < 0 || r > 1) return unchanged;
+      const cutoff = Number.isFinite(threshold) ? studyClamp(threshold, 0.55, 0.8) : STUDY_INFERRED_WEAK_DEFAULT;
+      if (r <= cutoff) return { stage: "weak", inferredWeak: true, retrievability: r };
+      if (saved === "perfect" && memory.due) {
+        return { stage: "known", inferredWeak: false, retrievability: r };
+      }
+      return { stage: saved, inferredWeak: false, retrievability: r };
+    }
     function studyUpdateMemory(before, correct, options, timestamp) {
       const when = Date.parse(timestamp);
       const nowMs = Number.isFinite(when) ? when : Date.now();
@@ -1376,21 +1392,33 @@ var require_study = __commonJS({
         while (this.selectedDeck && !this._tree.has(this.selectedDeck)) this.selectedDeck = this.selectedDeck.split("/").slice(0, -1).join("/");
         this.owner._knownTagPaths = [.../* @__PURE__ */ new Set([...this._tree.keys(), ...observedTags])].filter(Boolean);
       }
-      _level(card, nowMs = Date.now()) {
+      _displayLevel(card, nowMs = Date.now()) {
         const record = this.owner._mastery?.[card.id];
-        const level = record?.stage || (card.studied ? "known" : "unseen");
-        if (level === "perfect" && studyMemoryState(record, nowMs)?.due) {
-          return "known";
-        }
-        return level;
+        return studyDisplayLevel(
+          record,
+          card.studied ? "known" : "unseen",
+          nowMs,
+          this.owner.settings?.inferredWeakThreshold
+        );
+      }
+      _level(card, nowMs = Date.now()) {
+        return this._displayLevel(card, nowMs).stage;
+      }
+      _renderForgettingHint(parent, card) {
+        const state = this._displayLevel(card);
+        if (!state.inferredWeak) return;
+        parent.createEl("p", {
+          cls: "sr-mastery-caption akebi-forgetting-hint",
+          text: "\u305D\u308D\u305D\u308D\u5FD8\u308C\u3066\u3044\u308B\u304B\u3082 \xB7 \u63A8\u5B9A\u60F3\u8D77\u7387 " + Math.round(100 * state.retrievability) + "%\uFF08\u82E6\u624B\u3068\u3057\u3066\u5FA9\u7FD2\u3002\u904E\u53BB\u306EEase\u30FB\u6B63\u89E3\u6570\u306F\u305D\u306E\u307E\u307E\uFF09"
+        });
       }
       _isDue(card, nowMs = Date.now()) {
         const record = this.owner._mastery?.[card.id];
         return record ? !!studyMemoryState(record, nowMs)?.due : !!(card.nativeDue && Date.parse(card.nativeDue) <= nowMs);
       }
-      _stats(cards) {
+      _stats(cards, nowMs = Date.now()) {
         const result = { unseen: 0, weak: 0, known: 0, perfect: 0 };
-        for (const card of cards) result[this._level(card)]++;
+        for (const card of cards) result[this._level(card, nowMs)]++;
         return result;
       }
       _renderDonut(parent, stats, compact = false) {
@@ -1458,6 +1486,7 @@ var require_study = __commonJS({
         this.screen = "home";
         this.modalEl.classList.remove("sr-mastery-timeout-mode");
         this.main.replaceChildren();
+        const nowMs = Date.now();
         if (!this._tree) {
           this._tree = makeTree(this.cards);
           this._cardIndex = new Map(this.cards.map((c) => [c.id, c]));
@@ -1471,7 +1500,7 @@ var require_study = __commonJS({
           crumb.createSpan({ text: "\u203A", cls: "akebi-crumb-separator" });
           const path = parts.slice(0, i + 1).join("/");
           const b = crumb.createEl("button", { cls: "akebi-crumb-node" });
-          this._renderDonut(b, this._stats(this._nodeCards(path)), true);
+          this._renderDonut(b, this._stats(this._nodeCards(path), nowMs), true);
           b.createSpan({ text: this._tagTitle(path) });
           b.addEventListener("click", () => this._goDeck(path));
         }
@@ -1484,7 +1513,7 @@ var require_study = __commonJS({
             const cards2 = this._nodeCards(path);
             const button = grid.createEl("button", { cls: "akebi-deck-node" });
             button.setAttribute("data-deck", path);
-            this._renderDonut(button, this._stats(cards2), true);
+            this._renderDonut(button, this._stats(cards2, nowMs), true);
             const text = button.createDiv({ cls: "akebi-deck-text" });
             text.createSpan({ text: this._tagTitle(path), cls: "akebi-deck-name" });
             text.createSpan({ text: cards2.length + "\u554F", cls: "sr-mastery-caption" });
@@ -1498,7 +1527,7 @@ var require_study = __commonJS({
           return;
         }
         const cards = children.length ? this._nodeCards(this.selectedDeck, true) : this._nodeCards(this.selectedDeck);
-        const stats = this._stats(cards);
+        const stats = this._stats(cards, nowMs);
         const overview = this.main.createDiv({ cls: "sr-mastery-overview" });
         this._renderDonut(overview, stats);
         const info = overview.createDiv({ cls: "sr-mastery-overview-detail" });
@@ -1509,7 +1538,15 @@ var require_study = __commonJS({
           item.createSpan({ cls: "sr-mastery-legend-dot is-" + level });
           item.createSpan({ text: STUDY_LABELS[level] + " " + stats[level] });
         }
-        const due = cards.filter((c) => this._isDue(c));
+        const inferredWeak = cards.filter((c) => this._displayLevel(c, nowMs).inferredWeak).length;
+        if (inferredWeak) {
+          const cutoff = Math.round(100 * (this.owner.settings?.inferredWeakThreshold ?? STUDY_INFERRED_WEAK_DEFAULT));
+          info.createEl("p", {
+            cls: "sr-mastery-caption akebi-forgetting-hint",
+            text: "\u305D\u308D\u305D\u308D\u5FD8\u308C\u3066\u308B\u304B\u3082\uFF1A" + inferredWeak + "\u554F\uFF08\u63A8\u5B9A\u60F3\u8D77\u7387" + cutoff + "%\u4EE5\u4E0B\uFF09\u3002\u300C\u82E6\u624B\u300D\u306B\u542B\u3081\u3066\u3044\u307E\u3059\u3002Ease\u30FB\u6B63\u8AA4\u56DE\u6570\u306F\u6E1B\u3089\u3057\u307E\u305B\u3093\u3002"
+          });
+        }
+        const due = cards.filter((c) => this._isDue(c, nowMs));
         if (due.length) {
           const b = this.main.createEl("button", { text: "\u5FA9\u7FD2\u63A8\u5968 " + due.length + "\u554F \u203A", cls: "sr-mastery-due-start" });
           b.addEventListener("click", () => this._start(due, true));
@@ -1551,12 +1588,26 @@ var require_study = __commonJS({
         this.deferredWeak = /* @__PURE__ */ new Map();
         this.repSeen = /* @__PURE__ */ new Set();
         this.repGraded = /* @__PURE__ */ new Set();
-        const reviewStamp = (card) => {
-          const stamp = this.owner._mastery?.[card.id]?.lastReviewedAt;
-          const date = stamp ? Date.parse(stamp) : NaN;
-          return Number.isFinite(date) ? date : 0;
-        };
-        this.queue.sort((a, b) => reviewStamp(a) - reviewStamp(b));
+        const prioritized = ignoreStage || this.selectedStage === "weak";
+        const nowMs = Date.now();
+        const order = /* @__PURE__ */ new Map();
+        for (const card of this.queue) {
+          const record = this.owner._mastery?.[card.id];
+          const stamp = record?.lastReviewedAt ? Date.parse(record.lastReviewedAt) : NaN;
+          const r = prioritized ? studyMemoryState(record, nowMs)?.retrievability : null;
+          order.set(card.id, {
+            stamp: Number.isFinite(stamp) ? stamp : 0,
+            risk: Number.isFinite(r) && r >= 0 && r <= 1 ? r : 2
+          });
+        }
+        this.queue.sort((a, b) => {
+          const aa = order.get(a.id), bb = order.get(b.id);
+          if (prioritized) {
+            const risk = aa.risk - bb.risk;
+            if (risk) return risk;
+          }
+          return aa.stamp - bb.stamp;
+        });
         this.sessionStats = { attempted: 0, correct: 0 };
         this.repHistory = [];
         this.rep = {
@@ -1907,9 +1958,11 @@ var require_study = __commonJS({
         const row = this.main.createDiv({ cls: "sr-mastery-card-info" });
         row.createSpan({ text: q.card.deck });
         const state = this.owner._mastery?.[q.card.id];
+        const displayed = this._displayLevel(q.card);
         row.createSpan({
-          text: STUDY_LABELS[this._level(q.card)] + (Number.isFinite(state?.ease) ? " \xB7 Ease " + state.ease : "")
+          text: STUDY_LABELS[displayed.stage] + (displayed.inferredWeak ? "\uFF08\u5FD8\u5374\u63A8\u5B9A\uFF09" : "") + (Number.isFinite(state?.ease) ? " \xB7 Ease " + state.ease : "")
         });
+        if (q.state === "front") this._renderForgettingHint(this.main, q.card);
         if (this.rep) {
           this.main.createEl("p", {
             cls: "sr-mastery-rep-progress",
@@ -2351,7 +2404,7 @@ var require_study = __commonJS({
       }
     };
     Object.assign(AkebiStudyModal2.prototype, require_phrase_ui(), require_media().mediaUI);
-    module2.exports = { AkebiStudyModal: AkebiStudyModal2, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, reviewKey, excludedPath: excludedPath2, makeTree, tagLabel };
+    module2.exports = { AkebiStudyModal: AkebiStudyModal2, studyMasteryNext, studyCards, studyTag, studyOptions, studySentenceSpec, studySentenceGrade, studySentenceAccepted, studySentenceBank, studyMemoryState, studyDisplayLevel, reviewKey, excludedPath: excludedPath2, makeTree, tagLabel };
   }
 });
 
@@ -2462,6 +2515,7 @@ var DEFAULTS = Object.freeze({
   soundEnabled: true,
   soundVolume: 25,
   sentenceAreaHeight: 320,
+  inferredWeakThreshold: 0.65,
   tagLabels: {},
   excludedPaths: [],
   selectedDeckTag: null,
@@ -2484,6 +2538,7 @@ function settingsFrom(raw = {}) {
     sentenceLimitSeconds: finite(raw.sentenceLimitSeconds, 120, 45, 300),
     repSize: Math.round(finite(raw.repSize, 10, 1, 50)),
     sentenceAreaHeight: finite(raw.sentenceAreaHeight, 320, 220, 520),
+    inferredWeakThreshold: finite(raw.inferredWeakThreshold, 0.65, 0.55, 0.8),
     tagLabels: raw.tagLabels && typeof raw.tagLabels === "object" && !Array.isArray(raw.tagLabels) ? raw.tagLabels : {},
     excludedPaths: Array.isArray(raw.excludedPaths) ? raw.excludedPaths.filter((x) => typeof x === "string") : [],
     soundVolume: finite(raw.soundVolume, 25, 0, 100),
@@ -2761,6 +2816,16 @@ var AkebiSettings = class extends PluginSettingTab {
       }
     }));
     new Setting(el).setName("\u30BF\u30B0\u968E\u5C64\u306E\u8868\u793A\u540D").setDesc("\u82F1\u8A9E\u306E\u30BF\u30B0\u968E\u5C64\u306B\u5927\u5B66\u30FB\u751F\u7269\u30FB\u5358\u8A9E\u306A\u3069\u306E\u8868\u793A\u540D\u3092\u4ED8\u3051\u307E\u3059\u3002").addButton((b) => b.setButtonText("\u4E00\u89A7\u3068\u7DE8\u96C6").onClick(() => this.plugin.openTagNames()));
+    new Setting(el).setName("\u5FD8\u308C\u3066\u3044\u305D\u3046\u306A\u30AB\u30FC\u30C9\u3092\u300C\u82E6\u624B\u300D\u306B\u542B\u3081\u308B").setDesc("\u63A8\u5B9A\u60F3\u8D77\u7387\u304C\u3053\u306E\u5024\u4EE5\u4E0B\u306B\u306A\u3063\u305F\u3068\u304D\u3001\u753B\u9762\u4E0A\u3060\u3051\u82E6\u624B\u6271\u3044\u306B\u3057\u3066\u5FA9\u7FD2\u512A\u5148\u3002Ease\u3084\u904E\u53BB\u306E\u6B63\u7B54\u56DE\u6570\u306F\u6E1B\u3089\u3057\u307E\u305B\u3093\u3002").addDropdown((drop) => {
+      for (const p of [55, 60, 65, 70, 75, 80]) drop.addOption(String(p), p + "%");
+      drop.setValue(String(Math.round(this.plugin.settings.inferredWeakThreshold * 100)));
+      drop.onChange(async (value) => {
+        this.plugin.settings.inferredWeakThreshold = Number(value) / 100;
+        await this.plugin.saveData(this.plugin.settings);
+        const modal = this.plugin._studyModal;
+        if (modal?.screen === "home" && !modal.settingsOpen) modal._renderHome();
+      });
+    });
     new Setting(el).setName("\u554F\u984C\u3092\u691C\u67FB").setDesc("\u4E0D\u6B63\u306A\u30E1\u30BF\u30C7\u30FC\u30BF\u3084\u518D\u69CB\u6210\u3067\u304D\u306A\u3044\u6587\u3092\u8ABF\u3079\u307E\u3059\u3002").addButton((b) => b.setButtonText("\u691C\u67FB").onClick(() => this.plugin.checkCards()));
     el.createEl("p", { text: "\u5B66\u7FD2\u6642\u9593\u30FB\u97F3\u30FBRep\u30FB\u51FA\u984C\u5F62\u5F0F\u306F\u5B66\u7FD2\u753B\u9762\u306E\u8A2D\u5B9A\u304B\u3089\u5909\u66F4\u3067\u304D\u307E\u3059\u3002\u5168\u51E6\u7406\u306FVault\u5185\u3067\u5B8C\u7D50\u3057\u3001\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u901A\u4FE1\u306F\u884C\u3044\u307E\u305B\u3093\u3002" });
   }

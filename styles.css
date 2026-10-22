@@ -164,3 +164,10 @@
   flex:0 0 auto; min-height:37px; margin-top:3px; padding:5px 10px;
   align-self:flex-end; font-size:.84rem; max-width:100%;
 }
+
+/* The estimate is informational; do not visually equate it with a graded FAIL. */
+.akebi-modal .akebi-forgetting-hint {
+  line-height: 1.55;
+  margin: 7px 0 10px;
+  overflow-wrap: anywhere;
+}

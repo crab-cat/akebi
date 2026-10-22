@@ -8,7 +8,8 @@ const {excludedPath}=require('./taxonomy');
 const DEFAULTS = Object.freeze({
   recallLimitSeconds: 10, easyThresholdSeconds: 2, sentenceLimitSeconds: 120,
   studyMode: 'choice', choiceMode: true, soundEnabled: true, soundVolume: 25,
-  sentenceAreaHeight: 320, tagLabels: {}, excludedPaths: [], selectedDeckTag:null,
+  sentenceAreaHeight: 320, inferredWeakThreshold: 0.65,
+  tagLabels: {}, excludedPaths: [], selectedDeckTag:null,
   repSize: 10, selectedStudyStage: 'all', selectedStudyGenre: 'すべて',
   selectedStudyCourse: '', selectedStudyFolder: '', selectedStudyVocabulary: '',
   selectedStudyActivity: 'all', selectedStudyBrowseSubdecks: false
@@ -21,6 +22,7 @@ function settingsFrom(raw={}) {
     sentenceLimitSeconds:finite(raw.sentenceLimitSeconds,120,45,300),
     repSize:Math.round(finite(raw.repSize,10,1,50)),
     sentenceAreaHeight:finite(raw.sentenceAreaHeight,320,220,520),
+    inferredWeakThreshold:finite(raw.inferredWeakThreshold,0.65,0.55,0.80),
     tagLabels:raw.tagLabels && typeof raw.tagLabels==='object' && !Array.isArray(raw.tagLabels) ? raw.tagLabels : {},
     excludedPaths:Array.isArray(raw.excludedPaths)?raw.excludedPaths.filter(x=>typeof x==='string'):[],
     soundVolume:finite(raw.soundVolume,25,0,100),
@@ -241,6 +243,18 @@ class AkebiSettings extends PluginSettingTab {
           catch(error){new Notice('akebi: '+String(error.message||error));b.setDisabled(false);}
         }));
     new Setting(el).setName('タグ階層の表示名').setDesc('英語のタグ階層に大学・生物・単語などの表示名を付けます。').addButton(b=>b.setButtonText('一覧と編集').onClick(()=>this.plugin.openTagNames()));
+    new Setting(el).setName('忘れていそうなカードを「苦手」に含める')
+      .setDesc('推定想起率がこの値以下になったとき、画面上だけ苦手扱いにして復習優先。Easeや過去の正答回数は減らしません。')
+      .addDropdown(drop=>{
+        for(const p of [55,60,65,70,75,80])drop.addOption(String(p),p+'%');
+        drop.setValue(String(Math.round(this.plugin.settings.inferredWeakThreshold*100)));
+        drop.onChange(async value=>{
+          this.plugin.settings.inferredWeakThreshold=Number(value)/100;
+          await this.plugin.saveData(this.plugin.settings);
+          const modal=this.plugin._studyModal;
+          if(modal?.screen==='home' && !modal.settingsOpen)modal._renderHome();
+        });
+      });
     new Setting(el).setName('問題を検査').setDesc('不正なメタデータや再構成できない文を調べます。').addButton(b=>b.setButtonText('検査').onClick(()=>this.plugin.checkCards()));
     el.createEl('p',{text:'学習時間・音・Rep・出題形式は学習画面の設定から変更できます。全処理はVault内で完結し、ネットワーク通信は行いません。'});
   }
