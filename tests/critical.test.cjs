@@ -400,19 +400,18 @@ test('repeated open/close survives PDF cleanup failure and a detached stale moda
  };
  const plugin=new h.Plugin(app);
  await plugin.onload();
- await plugin.openStudy();
- const initial=plugin._studyModal;
- assert(initial,'first open must create a modal');
- await new Promise(resolve=>setImmediate(resolve));
- assert.equal(initial._closed,false);
- initial._clearCardMedia=()=>{throw Error('simulated PDF viewer teardown failure')};
- assert.doesNotThrow(()=>initial.close(),'cleanup failure must not trap the modal');
- assert.equal(plugin._studyModal,null,'closed modal reference must clear');
- await plugin.openStudy();
- const second=plugin._studyModal;
- assert(second && second!==initial,'must construct a new modal on the second open');
- second.close();
- assert.equal(plugin._studyModal,null);
+ const firstHash=JSON.stringify(plugin._mastery);
+ for(let i=0;i<4;i++){
+   await plugin.openStudy();
+   const current=plugin._studyModal;
+   assert(current,'each opening must construct a visible modal');
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(current._closed,false);
+   if(i===0)current._clearCardMedia=()=>{throw Error('simulated PDF viewer teardown failure')};
+   assert.doesNotThrow(()=>current.close(),'cleanup failure must not trap the modal');
+   assert.equal(plugin._studyModal,null,'closed modal reference must clear');
+   assert.equal(current._ticker,null,'ticker must be released');
+ }
  plugin._studyModal={_closed:true,modalEl:{isConnected:false},
    close(){this._closed=true;}};
  await plugin.openStudy();
@@ -420,6 +419,7 @@ test('repeated open/close survives PDF cleanup failure and a detached stale moda
    'an orphaned detached modal must not permanently block reopening');
  plugin._studyModal.close();
  assert.equal(plugin._studyModal,null);
+ assert.equal(JSON.stringify(plugin._mastery),firstHash,'open/close must not grade a card');
  h.close();
 });
 test('failed modal startup and late card-read rejection do not block another open',async()=>{
@@ -429,29 +429,36 @@ test('failed modal startup and late card-read rejection do not block another ope
    metadataCache:{getFileCache:()=>null}
  };
  const plugin=new h.Plugin(app);await plugin.onload();
- const original=h.api.AkebiStudyModal.prototype._renderShell;
+ const originalShell=h.api.AkebiStudyModal.prototype._renderShell;
  h.api.AkebiStudyModal.prototype._renderShell=function(){throw Error('simulated startup failure')};
  try{
    await plugin.openStudy();
    assert.equal(plugin._studyModal,null,'failed startup must release its owner reference');
- }finally{h.api.AkebiStudyModal.prototype._renderShell=original;}
+ }finally{h.api.AkebiStudyModal.prototype._renderShell=originalShell;}
+ const originalLoad=h.api.AkebiStudyModal.prototype._loadCards;
+ let started, reject;
+ const entered=new Promise(resolve=>{started=resolve;});
+ h.api.AkebiStudyModal.prototype._loadCards=function(){
+   started();
+   return new Promise((_,rejectFn)=>{reject=rejectFn;});
+ };
+ try{
+   await plugin.openStudy();
+   const modal=plugin._studyModal;
+   assert(modal,'startup must work again after an earlier failure');
+   await entered;
+   modal._showError=()=>{throw Error('late failure must not render into closed modal');};
+   modal.close();
+   assert.equal(plugin._studyModal,null);
+   reject(Error('late iCloud read failure'));
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(plugin._studyModal,null,'background rejection cannot resurrect a modal');
+ }finally{
+   h.api.AkebiStudyModal.prototype._loadCards=originalLoad;
+ }
  await plugin.openStudy();
- assert(plugin._studyModal,'startup must work again after an earlier failure');
- const modal=plugin._studyModal;
- let reject;
- modal._showError=()=>{throw Error('late failure rendered into an already-closed modal')};
- modal._loadCards=()=>new Promise((_,rejectFn)=>{reject=rejectFn;});
- modal.close();
+ assert(plugin._studyModal && !plugin._studyModal._closed);
+ plugin._studyModal.close();
  assert.equal(plugin._studyModal,null);
- // A pending background reader can finish after the view has gone away.
- modal.onOpen();
- await Promise.resolve(); // _loadCards is intentionally scheduled in a microtask.
- assert.equal(typeof reject,'function');
- modal.close();
- reject(Error('late read failure'));
- await new Promise(resolve=>setImmediate(resolve));
- assert.equal(plugin._studyModal,null);
- await plugin.openStudy();
- assert(plugin._studyModal && plugin._studyModal!==modal);
- plugin._studyModal.close();h.close();
+ h.close();
 });
