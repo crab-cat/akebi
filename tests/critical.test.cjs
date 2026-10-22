@@ -15,7 +15,20 @@ function harness(){
   ep.empty=function(){this.replaceChildren()};ep.addClass=function(...args){this.classList.add(...args)};
   class Modal{constructor(app){this.app=app;this.modalEl=w.document.body.createDiv({cls:'modal'});this.contentEl=this.modalEl.createDiv({cls:'modal-content'});}open(){this.onOpen();}close(){this.onClose();this.modalEl.remove();}}
   class Plugin{constructor(app){this.app=app;this.manifest={id:'akebi',version:'0.8.0',dir:'.obsidian/plugins/akebi'};}async loadData(){return this.data||{};}async saveData(x){this.data=x;}registerEvent(){}addCommand(){}addRibbonIcon(){}registerObsidianProtocolHandler(){}addSettingTab(){}}
-  const obsidian={Modal,FuzzySuggestModal:class extends Modal{setPlaceholder(){}},Plugin,PluginSettingTab:class{},Setting:class{},Notice:class{},setIcon:(el,name)=>el.setAttribute('data-icon',name),normalizePath:p=>p.replace(/\/+/g,'/'),MarkdownRenderer:{renderMarkdown:async(markdown,el,source)=>{el.dataset.renderedMarkdown=markdown;el.dataset.sourceNote=source;}},getAllTags:cache=>cache.tags?.map(x=>x.tag)||[]};
+  class MarkdownRenderChild{
+    constructor(el){this.containerEl=el;this.loaded=false;}
+    load(){this.loaded=true;this.containerEl.dataset.akebiChildState='loaded';}
+    unload(){this.loaded=false;this.containerEl.dataset.akebiChildState='unloaded';}
+  }
+  const obsidian={Modal,MarkdownRenderChild,FuzzySuggestModal:class extends Modal{setPlaceholder(){}},Plugin,PluginSettingTab:class{},Setting:class{},Notice:class{},setIcon:(el,name)=>el.setAttribute('data-icon',name),normalizePath:p=>p.replace(/\/+/g,'/'),MarkdownRenderer:{
+    render:async(app,markdown,el,source,component)=>{
+      assert(component instanceof MarkdownRenderChild);
+      assert(component.loaded);
+      el.dataset.renderedMarkdown=markdown;el.dataset.sourceNote=source;
+      el.dataset.renderedWith='modernMarkdownRenderer';
+    },
+    renderMarkdown:async()=>{throw Error('Deprecated MarkdownRenderer unexpectedly used');}
+  },getAllTags:cache=>cache.tags?.map(x=>x.tag)||[]};
   const cache=new Map();
   function load(name){
     if(name==='obsidian')return obsidian;
@@ -274,10 +287,15 @@ test('PDF++ rect links render the original lecture rectangle, preserve SR and su
  assert.equal(region.querySelector('.akebi-pdf-rect-embed'),null);
  modal._renderCardImages(region,{source:'cell.md',images:[{link:pdf,showOn:'answer'}]},'answer');
  assert.equal(region.querySelector('.akebi-pdf-rect-embed').dataset.renderedMarkdown,pdf);
+ assert.equal(region.querySelector('.akebi-pdf-rect-embed').dataset.renderedWith,'modernMarkdownRenderer');
+ assert.equal(region.querySelector('.akebi-pdf-rect-embed').dataset.akebiChildState,'loaded');
  region.querySelector('.akebi-pdf-rect-source').click();
  await new Promise(done=>setImmediate(done));
  assert(opened[0][0].includes('#page=14&rect=250,80,850,470'));
  await modal._saveCardImages({source:'cell.md',question:'Cell?',images:[]},[{link:pdf,showOn:'answer'}]);
  assert(app.patched.includes('![[resources/handouts/example-lecture.pdf#page=14&rect=250,80,850,470&width=450]]'));
+ const pdfRegion=region.querySelector('.akebi-pdf-rect-embed');
+ modal._renderCardImages(h.window.document.body.createDiv(),{source:'cell.md',images:[]},'question');
+ assert.equal(pdfRegion.dataset.akebiChildState,'unloaded','previous PDF++ child must be destroyed on rerender');
  h.close();
 });

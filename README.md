@@ -116,4 +116,9 @@ PDF++ rectangle embeds are also supported when the source PDF is inside the Vaul
 
 Renaming the PDF while Akebi is running updates card metadata links without losing page/rect coordinates. When ambiguous bare filenames collide, links are not guessed automatically. This is optional: Akebi flashcards work without PDF++.
 
+PDF++ rect values use PDF user-space with a **bottom-left origin** (x-left, y-bottom, x-right, y-top), not top-left image coordinates. A top-left crop rectangle of a PDF page of height H needs the conversion [x0, H-y1, x1, H-y0]. Akebi now uses the modern Obsidian MarkdownRenderer.render API with a lifecycle-bound MarkdownRenderChild, cleaning up embedded PDF viewers on navigation.
+
+Answer-only images display a compact indicator on the question card explaining that the reference figure appears on feedback. For context-building relation exercises, showOn:question is supported; term recognition cards often use showOn:answer to avoid revealing their answers.
+
+
 Only vault-local raster images and PDF rectangle references are resolved. Absolute paths, traversal, remote URLs and data URLs in authored metadata are rejected. The image frame reserves its size before loading so it cannot move the candidate bank during play. Selecting or unlinking an image uses an editor-aware metadata update; the original Q/A and SR comments remain unchanged.

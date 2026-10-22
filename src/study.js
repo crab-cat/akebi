@@ -473,6 +473,7 @@ class AkebiStudyModal extends Modal {
   }
 
   onClose() {
+    this._clearCardMedia?.();
     this._cancelSentenceDrag?.();
     this._stopPronunciation?.();
     this._closed = true;
@@ -621,6 +622,7 @@ class AkebiStudyModal extends Modal {
   _tagTitle(path) { return tagLabel(path,this.owner.settings.tagLabels||{}); }
   _scopeLabel() { const parts=this.selectedDeck.split('/').filter(Boolean);return parts.slice(-2).map((_,i)=>this._tagTitle(parts.slice(0,Math.max(1,parts.length-1)+i).join('/'))).join(' › '); }
   _renderHome() {
+    this._clearCardMedia?.();
     this._cancelSentenceDrag?.();this.current=null;this._stopPronunciation();this._stopCelebration();
     void this.owner._flushMastery?.();
     this.screen='home';this.modalEl.classList.remove('sr-mastery-timeout-mode');this.main.replaceChildren();
@@ -722,6 +724,7 @@ class AkebiStudyModal extends Modal {
 
   _next() {
     if(this.screen==='study' && this.current?.state==='front')return;
+    this._clearCardMedia?.();
     this._cancelSentenceDrag?.();
     this._stopPronunciation();
     this._token++;

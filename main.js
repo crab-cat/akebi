@@ -588,7 +588,7 @@ var require_phrase_ui = __commonJS({
 var require_media = __commonJS({
   "src/media.js"(exports2, module2) {
     "use strict";
-    var { Notice: Notice2, MarkdownRenderer } = require("obsidian");
+    var { Notice: Notice2, MarkdownRenderer, MarkdownRenderChild } = require("obsidian");
     var EXTENSIONS = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
     var MEDIA_EXTENSIONS2 = /* @__PURE__ */ new Set([...EXTENSIONS, "pdf"]);
     var META = /^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/;
@@ -724,10 +724,28 @@ var require_media = __commonJS({
       return file && MEDIA_EXTENSIONS2.has((file.extension || "").toLowerCase()) ? { ref, file } : null;
     }
     var mediaUI = {
+      _clearCardMedia() {
+        for (const component of this._akebiPdfChildren || []) {
+          try {
+            component.unload?.();
+          } catch (error) {
+            console.warn("akebi PDF embed cleanup", error);
+          }
+        }
+        this._akebiPdfChildren = [];
+      },
       _renderCardImages(parent, card, phase) {
+        this._clearCardMedia();
         for (const raw of (card.images || []).slice(0, 4)) {
           const ref = localImage2(raw);
-          if (!ref || ref.showOn === "answer" && phase !== "answer") continue;
+          if (!ref) continue;
+          if (ref.showOn === "answer" && phase !== "answer") {
+            parent.createEl("p", {
+              text: "\u{1F4D6} \u53C2\u8003\u56F3\u306F\u7B54\u3048\u5408\u308F\u305B\u5F8C\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002",
+              cls: "akebi-pdf-rect-pending sr-mastery-caption"
+            });
+            continue;
+          }
           const fig = parent.createEl("figure", { cls: "akebi-card-image" });
           const resolved = resolveImage(this.app, card, raw);
           if (!resolved) {
@@ -737,27 +755,41 @@ var require_media = __commonJS({
           if (ref.kind === "pdf-rect") {
             fig.classList.add("akebi-card-pdf-rect");
             const region = fig.createDiv({ cls: "akebi-pdf-rect-embed" });
-            const renderer = MarkdownRenderer?.renderMarkdown;
-            if (typeof renderer === "function") {
-              void Promise.resolve(renderer.call(
-                MarkdownRenderer,
-                ref.link,
-                region,
-                card.source || "",
-                this.owner || this
-              )).catch((error) => {
-                region.replaceChildren();
-                region.createSpan({
-                  text: "PDF\u306E\u77E9\u5F62\u3092\u8868\u793A\u3067\u304D\u307E\u305B\u3093\uFF1A" + ref.path,
-                  cls: "sr-mastery-caption"
-                });
-                console.warn("akebi PDF rect render", error);
-              });
-            } else {
+            region.classList.add("markdown-rendered");
+            const child = typeof MarkdownRenderChild === "function" ? new MarkdownRenderChild(region) : null;
+            if (child) {
+              child.load?.();
+              (this._akebiPdfChildren || (this._akebiPdfChildren = [])).push(child);
+            }
+            const component = child || this.owner || this;
+            const onError = (error) => {
+              if (!region.isConnected) return;
+              region.replaceChildren();
               region.createSpan({
-                text: "PDF\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u6709\u52B9\u306B\u3059\u308B\u3068\u77E9\u5F62\u3092\u8868\u793A\u3067\u304D\u307E\u3059\u3002",
+                text: "PDF\u306E\u77E9\u5F62\u3092\u8868\u793A\u3067\u304D\u307E\u305B\u3093\u3002\u5143\u8CC7\u6599\u3078\u306E\u30EA\u30F3\u30AF\u304B\u3089\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002",
                 cls: "sr-mastery-caption"
               });
+              console.warn("akebi PDF rect render", error);
+            };
+            try {
+              if (typeof MarkdownRenderer?.render === "function") {
+                void Promise.resolve(MarkdownRenderer.render(
+                  this.app,
+                  ref.link,
+                  region,
+                  card.source || "",
+                  component
+                )).catch(onError);
+              } else if (typeof MarkdownRenderer?.renderMarkdown === "function") {
+                void Promise.resolve(MarkdownRenderer.renderMarkdown(
+                  ref.link,
+                  region,
+                  card.source || "",
+                  component
+                )).catch(onError);
+              } else onError(new Error("Obsidian MarkdownRenderer is unavailable"));
+            } catch (error) {
+              onError(error);
             }
             const jump = fig.createEl("button", {
               cls: "akebi-pdf-rect-source",
@@ -1270,6 +1302,7 @@ var require_study = __commonJS({
         this._ticker = this.win.setInterval(() => this._tick(), 80);
       }
       onClose() {
+        this._clearCardMedia?.();
         this._cancelSentenceDrag?.();
         this._stopPronunciation?.();
         this._closed = true;
@@ -1416,6 +1449,7 @@ var require_study = __commonJS({
         return parts.slice(-2).map((_, i) => this._tagTitle(parts.slice(0, Math.max(1, parts.length - 1) + i).join("/"))).join(" \u203A ");
       }
       _renderHome() {
+        this._clearCardMedia?.();
         this._cancelSentenceDrag?.();
         this.current = null;
         this._stopPronunciation();
@@ -1537,6 +1571,7 @@ var require_study = __commonJS({
       }
       _next() {
         if (this.screen === "study" && this.current?.state === "front") return;
+        this._clearCardMedia?.();
         this._cancelSentenceDrag?.();
         this._stopPronunciation();
         this._token++;

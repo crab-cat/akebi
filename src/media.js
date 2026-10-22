@@ -1,5 +1,5 @@
 'use strict';
-const {Notice,MarkdownRenderer}=require('obsidian');
+const {Notice,MarkdownRenderer,MarkdownRenderChild}=require('obsidian');
 const EXTENSIONS=new Set(['png','jpg','jpeg','webp','gif','avif']);
 const MEDIA_EXTENSIONS=new Set([...EXTENSIONS,'pdf']);
 const META=/^(\s*)%%(RMUX|AKEBI) (\{.*\})%%\s*$/;
@@ -119,10 +119,24 @@ function resolveImage(app,card,raw){
   return file&&MEDIA_EXTENSIONS.has((file.extension||'').toLowerCase())?{ref,file}:null;
 }
 const mediaUI={
+  _clearCardMedia(){
+    for(const component of this._akebiPdfChildren||[]){
+      try{component.unload?.();}catch(error){console.warn('akebi PDF embed cleanup',error);}
+    }
+    this._akebiPdfChildren=[];
+  },
   _renderCardImages(parent,card,phase){
+    // The underlying PDF viewer holds observers and PDF.js documents.
+    // Unload the old render child whenever the question/feedback changes.
+    this._clearCardMedia();
     for(const raw of (card.images||[]).slice(0,4)){
       const ref=localImage(raw);
-      if(!ref || (ref.showOn==='answer'&&phase!=='answer'))continue;
+      if(!ref)continue;
+      if(ref.showOn==='answer'&&phase!=='answer'){
+        parent.createEl('p',{text:'📖 参考図は答え合わせ後に表示されます。',
+          cls:'akebi-pdf-rect-pending sr-mastery-caption'});
+        continue;
+      }
       const fig=parent.createEl('figure',{cls:'akebi-card-image'});
       const resolved=resolveImage(this.app,card,raw);
       if(!resolved){
@@ -133,20 +147,33 @@ const mediaUI={
         fig.classList.add('akebi-card-pdf-rect');
         const region=fig.createDiv({cls:'akebi-pdf-rect-embed'});
         // PDF++ renders native PDF rectangle embeds; no raster copy is created.
-        const renderer=MarkdownRenderer?.renderMarkdown;
-        if(typeof renderer==='function'){
-          void Promise.resolve(renderer.call(MarkdownRenderer,
-              ref.link,region,card.source||'',this.owner||this))
-            .catch(error=>{
-              region.replaceChildren();
-              region.createSpan({text:'PDFの矩形を表示できません：'+ref.path,
-                cls:'sr-mastery-caption'});
-              console.warn('akebi PDF rect render',error);
-            });
-        }else{
-          region.createSpan({text:'PDFプレビューを有効にすると矩形を表示できます。',
-            cls:'sr-mastery-caption'});
+        region.classList.add('markdown-rendered');
+        // Obsidian's Markdown renderer owns the native PDF embed and PDF++
+        // augments that viewer. The legacy renderMarkdown call did not
+        // guarantee the native PDF child was loaded/cleaned up in a Modal.
+        const child=typeof MarkdownRenderChild==='function'
+          ? new MarkdownRenderChild(region) : null;
+        if(child){
+          child.load?.();
+          (this._akebiPdfChildren ||= []).push(child);
         }
+        const component=child||this.owner||this;
+        const onError=error=>{
+          if(!region.isConnected)return;
+          region.replaceChildren();
+          region.createSpan({text:'PDFの矩形を表示できません。元資料へのリンクから確認できます。',
+            cls:'sr-mastery-caption'});
+          console.warn('akebi PDF rect render',error);
+        };
+        try{
+          if(typeof MarkdownRenderer?.render==='function'){
+            void Promise.resolve(MarkdownRenderer.render(
+              this.app,ref.link,region,card.source||'',component)).catch(onError);
+          }else if(typeof MarkdownRenderer?.renderMarkdown==='function'){
+            void Promise.resolve(MarkdownRenderer.renderMarkdown(
+              ref.link,region,card.source||'',component)).catch(onError);
+          }else onError(new Error('Obsidian MarkdownRenderer is unavailable'));
+        }catch(error){onError(error);}
         const jump=fig.createEl('button',{
           cls:'akebi-pdf-rect-source',text:'配布資料の該当範囲を開く ↗'});
         jump.type='button';
