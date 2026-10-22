@@ -36,6 +36,16 @@ photosynthesis :: 光合成
 
 See [phrase authoring](docs/phrase-authoring.md) for the `sentence` v2 schema. Invalid sentence metadata is withheld from study rather than producing an impossible or falsely graded exercise. Use **akebi: 問題形式を検査する** to check it.
 
+## Closing and reopening the study window
+
+As of **0.8.6**, the study modal always releases its active-window guard
+*before* tearing down PDF embeds, speech/audio, drag gestures, and timers.
+If a rendering component cannot be unloaded, the remaining cleanup steps
+still execute. A failed startup does not leave a phantom open window, and
+an asynchronous note read arriving after close is discarded rather than
+drawing into a stale modal. The launcher also recovers a detached stale
+window reference. Open → close → reopen works without restarting Obsidian.
+
 ## Progress and migration
 
 Progress lives in this plugin's `mastery.json`; settings live in `data.json`. Neither is included in the public repository or release.

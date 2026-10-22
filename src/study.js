@@ -473,6 +473,7 @@ class AkebiStudyModal extends Modal {
     this.settingsOpen = false;
     this.soundContext = null;
     this._ticker = null;
+    this._closed = false;
     this._saving = Promise.resolve();
     this._token = 0;
     this.rep = null;
@@ -481,34 +482,78 @@ class AkebiStudyModal extends Modal {
   }
 
   onOpen() {
+    this._closed = false;
     this.modalEl.addClass("sr-mastery-modal", "akebi-modal");
     this.modalEl.setAttribute("aria-label", "akebi 学習");
     this.contentEl.empty();
     this._renderShell();
     this._renderLoading();
-    void this._loadCards().then(() => {
+
+    // A modal can be closed while a large iCloud-backed vault is still
+    // being read. Neither a late success nor a late rejection may draw
+    // into an already destroyed view.
+    this._loadPromise = Promise.resolve().then(() => this._loadCards()).then(() => {
       if (this._closed) return;
       this._renderHome();
-    }).catch(err => {
-      this._showError("カードを読み込めませんでした: " + String(err.message || err));
+    }).catch(error => {
+      if (this._closed) return;
+      console.error("akebi: card loading failed", error);
+      try { this._showError("カードを読み込めませんでした: " + String(error?.message || error)); }
+      catch (renderError) { console.error("akebi: error screen failed", renderError); }
     });
-    this._ticker = this.win.setInterval(() => this._tick(), 80);
+
+    // Timer errors must not escape as uncaught exceptions in the Obsidian
+    // renderer, and a failed timer must never run after the modal closes.
+    this._ticker = this.win.setInterval(() => {
+      if (this._closed) return;
+      try { this._tick(); }
+      catch (error) {
+        console.error("akebi: study timer failed", error);
+        try { this.win.clearInterval(this._ticker); } catch (_) {}
+        this._ticker = null;
+        if (!this._closed) {
+          try { this._showError("画面の更新に失敗しました。閉じて再度開いてください。"); }
+          catch (renderError) { console.error("akebi: timer error rendering failed", renderError); }
+        }
+      }
+    }, 80);
   }
 
   onClose() {
-    this._clearCardMedia?.();
-    this._cancelSentenceDrag?.();
-    this._stopPronunciation?.();
+    // Set the closed flag and release the singleton reference first:
+    // a PDF++ render child, pointer capture, or vault write can fail
+    // during cleanup. None of those failures may trap a stale modal and
+    // prevent the next open.
     this._closed = true;
-    // Grade writes run immediately after every response; closing a
-    // half-finished Rep waits for the latest snapshot and retries on error.
-    void this.owner._flushMastery?.();
-    this.win.clearInterval(this._ticker);
-    this._stopCelebration();
+    if (this.owner?._studyModal === this) this.owner._studyModal = null;
+    const safely = (step, cleanup) => {
+      try { cleanup(); }
+      catch (error) { console.warn("akebi: close cleanup failed (" + step + ")", error); }
+    };
+    safely("timer", () => {
+      if (this._ticker != null) this.win.clearInterval(this._ticker);
+      this._ticker = null;
+    });
+    safely("PDF embeds", () => this._clearCardMedia?.());
+    safely("drag and drop", () => this._cancelSentenceDrag?.());
+    safely("pronunciation", () => this._stopPronunciation?.());
+    safely("celebration", () => this._stopCelebration());
+    safely("save", () => {
+      const result = this.owner?._flushMastery?.();
+      if (result && typeof result.catch === "function") {
+        void result.catch(error => console.error("akebi: closing save failed", error));
+      }
+    });
+    safely("audio", () => {
+      const result = this.soundContext?.close();
+      if (result && typeof result.catch === "function") {
+        void result.catch(error => console.warn("akebi: audio close failed", error));
+      }
+      this.soundContext = null;
+    });
+    safely("content", () => this.contentEl.empty());
     this.current = null;
-    this.contentEl.empty();
-    try { this.soundContext?.close(); } catch (_) {}
-    this.owner._studyModal = null;
+    this._loadPromise = null;
   }
 
   _renderShell() {
@@ -547,6 +592,7 @@ class AkebiStudyModal extends Modal {
   }
 
   async _loadCards() {
+    if (this._closed) return;
     const files = this.app.vault.getMarkdownFiles().filter(f=>!excludedPath(f.path,this.owner.settings.excludedPaths||[]));
     const collected = [];const observedTags=new Set();
     // Serial reads avoid spiking memory/IO on iPhone. Metadata cache is

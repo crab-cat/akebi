@@ -92,14 +92,45 @@ class Akebi extends Plugin {
     return result;
   }
   async openStudy() {
-    if(this._loadError){new Notice('akebi: 履歴ファイルの読込エラーを解消してから再起動してください。');return;}
-    if(this._studyModal || this._openingStudy)return;
+    if(this._loadError){
+      new Notice('akebi: 履歴ファイルの読込エラーを解消してから再起動してください。');
+      return;
+    }
+    if(this._openingStudy)return;
+    // A closed or detached modal reference must never make the command
+    // silently do nothing. This also recovers older versions that left a
+    // stale singleton behind when a PDF or audio cleanup step threw.
+    const previous=this._studyModal;
+    if(previous){
+      if(!previous._closed && previous.modalEl?.isConnected){
+        previous.modalEl.focus?.();
+        return; // It really is open already.
+      }
+      this._studyModal=null;
+      try { previous.close?.(); }
+      catch(error){console.warn('akebi: stale modal cleanup failed',error);}
+    }
     this._openingStudy=true;
+    let next=null;
     try {
       this._mastery=mergeNewer(await this.readLedger(),this._mastery);
-      this._studyModal=new AkebiStudyModal(this.app,this);this._studyModal.open();
-    } catch(error){new Notice('akebi: 学習画面を開けませんでした。既存ファイルは保持しています。');}
-    finally{this._openingStudy=false;}
+      next=new AkebiStudyModal(this.app,this);
+      this._studyModal=next;
+      next.open();
+    } catch(error){
+      // Construction and Obsidian Modal.open/onOpen can fail synchronously.
+      // Clean up both the failed instance and the guard so the next
+      // invocation can try again without restarting the application.
+      if(this._studyModal===next)this._studyModal=null;
+      if(next){
+        try { next.close?.(); }
+        catch(closeError){console.warn('akebi: failed startup cleanup',closeError);}
+      }
+      console.error('akebi: openStudy failed',error);
+      new Notice('akebi: 学習画面を開けませんでした: '+String(error?.message||error));
+    } finally {
+      this._openingStudy=false;
+    }
   }
   pickImage(){return pickImage(this.app);}
   async openTagNames(cards){

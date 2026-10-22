@@ -1,6 +1,6 @@
 {
   "name": "akebi",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "private": true,
   "description": "Local-first flashcards and constrained sentence assembly for Obsidian.",
   "scripts": {

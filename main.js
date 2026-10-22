@@ -1297,6 +1297,7 @@ var require_study = __commonJS({
         this.settingsOpen = false;
         this.soundContext = null;
         this._ticker = null;
+        this._closed = false;
         this._saving = Promise.resolve();
         this._token = 0;
         this.rep = null;
@@ -1304,34 +1305,79 @@ var require_study = __commonJS({
         this._celebrationTimer = null;
       }
       onOpen() {
+        this._closed = false;
         this.modalEl.addClass("sr-mastery-modal", "akebi-modal");
         this.modalEl.setAttribute("aria-label", "akebi \u5B66\u7FD2");
         this.contentEl.empty();
         this._renderShell();
         this._renderLoading();
-        void this._loadCards().then(() => {
+        this._loadPromise = Promise.resolve().then(() => this._loadCards()).then(() => {
           if (this._closed) return;
           this._renderHome();
-        }).catch((err) => {
-          this._showError("\u30AB\u30FC\u30C9\u3092\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3067\u3057\u305F: " + String(err.message || err));
+        }).catch((error) => {
+          if (this._closed) return;
+          console.error("akebi: card loading failed", error);
+          try {
+            this._showError("\u30AB\u30FC\u30C9\u3092\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3067\u3057\u305F: " + String(error?.message || error));
+          } catch (renderError) {
+            console.error("akebi: error screen failed", renderError);
+          }
         });
-        this._ticker = this.win.setInterval(() => this._tick(), 80);
+        this._ticker = this.win.setInterval(() => {
+          if (this._closed) return;
+          try {
+            this._tick();
+          } catch (error) {
+            console.error("akebi: study timer failed", error);
+            try {
+              this.win.clearInterval(this._ticker);
+            } catch (_) {
+            }
+            this._ticker = null;
+            if (!this._closed) {
+              try {
+                this._showError("\u753B\u9762\u306E\u66F4\u65B0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u9589\u3058\u3066\u518D\u5EA6\u958B\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
+              } catch (renderError) {
+                console.error("akebi: timer error rendering failed", renderError);
+              }
+            }
+          }
+        }, 80);
       }
       onClose() {
-        this._clearCardMedia?.();
-        this._cancelSentenceDrag?.();
-        this._stopPronunciation?.();
         this._closed = true;
-        void this.owner._flushMastery?.();
-        this.win.clearInterval(this._ticker);
-        this._stopCelebration();
+        if (this.owner?._studyModal === this) this.owner._studyModal = null;
+        const safely = (step, cleanup) => {
+          try {
+            cleanup();
+          } catch (error) {
+            console.warn("akebi: close cleanup failed (" + step + ")", error);
+          }
+        };
+        safely("timer", () => {
+          if (this._ticker != null) this.win.clearInterval(this._ticker);
+          this._ticker = null;
+        });
+        safely("PDF embeds", () => this._clearCardMedia?.());
+        safely("drag and drop", () => this._cancelSentenceDrag?.());
+        safely("pronunciation", () => this._stopPronunciation?.());
+        safely("celebration", () => this._stopCelebration());
+        safely("save", () => {
+          const result = this.owner?._flushMastery?.();
+          if (result && typeof result.catch === "function") {
+            void result.catch((error) => console.error("akebi: closing save failed", error));
+          }
+        });
+        safely("audio", () => {
+          const result = this.soundContext?.close();
+          if (result && typeof result.catch === "function") {
+            void result.catch((error) => console.warn("akebi: audio close failed", error));
+          }
+          this.soundContext = null;
+        });
+        safely("content", () => this.contentEl.empty());
         this.current = null;
-        this.contentEl.empty();
-        try {
-          this.soundContext?.close();
-        } catch (_) {
-        }
-        this.owner._studyModal = null;
+        this._loadPromise = null;
       }
       _renderShell() {
         const shell = this.contentEl.createDiv({ cls: "sr-mastery-shell" });
@@ -1365,6 +1411,7 @@ var require_study = __commonJS({
         back.addEventListener("click", () => this._renderHome());
       }
       async _loadCards() {
+        if (this._closed) return;
         const files = this.app.vault.getMarkdownFiles().filter((f) => !excludedPath2(f.path, this.owner.settings.excludedPaths || []));
         const collected = [];
         const observedTags = /* @__PURE__ */ new Set();
@@ -2631,14 +2678,38 @@ var Akebi = class extends Plugin {
       new Notice("akebi: \u5C65\u6B74\u30D5\u30A1\u30A4\u30EB\u306E\u8AAD\u8FBC\u30A8\u30E9\u30FC\u3092\u89E3\u6D88\u3057\u3066\u304B\u3089\u518D\u8D77\u52D5\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
       return;
     }
-    if (this._studyModal || this._openingStudy) return;
+    if (this._openingStudy) return;
+    const previous = this._studyModal;
+    if (previous) {
+      if (!previous._closed && previous.modalEl?.isConnected) {
+        previous.modalEl.focus?.();
+        return;
+      }
+      this._studyModal = null;
+      try {
+        previous.close?.();
+      } catch (error) {
+        console.warn("akebi: stale modal cleanup failed", error);
+      }
+    }
     this._openingStudy = true;
+    let next = null;
     try {
       this._mastery = mergeNewer(await this.readLedger(), this._mastery);
-      this._studyModal = new AkebiStudyModal(this.app, this);
-      this._studyModal.open();
+      next = new AkebiStudyModal(this.app, this);
+      this._studyModal = next;
+      next.open();
     } catch (error) {
-      new Notice("akebi: \u5B66\u7FD2\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u65E2\u5B58\u30D5\u30A1\u30A4\u30EB\u306F\u4FDD\u6301\u3057\u3066\u3044\u307E\u3059\u3002");
+      if (this._studyModal === next) this._studyModal = null;
+      if (next) {
+        try {
+          next.close?.();
+        } catch (closeError) {
+          console.warn("akebi: failed startup cleanup", closeError);
+        }
+      }
+      console.error("akebi: openStudy failed", error);
+      new Notice("akebi: \u5B66\u7FD2\u753B\u9762\u3092\u958B\u3051\u307E\u305B\u3093\u3067\u3057\u305F: " + String(error?.message || error));
     } finally {
       this._openingStudy = false;
     }

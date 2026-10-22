@@ -389,3 +389,69 @@ test('estimated weak is counted in donut/weak filter, ordered by recall risk, an
  assert.equal(owner._mastery.recentForgotten.attempts,6);
  h.close();
 });
+
+test('repeated open/close survives PDF cleanup failure and a detached stale modal',async()=>{
+ const h=harness();
+ const app={
+   vault:{configDir:'.obsidian',on:()=>({}),
+     getMarkdownFiles:()=>[],
+     adapter:{exists:async()=>false,read:async()=>'',write:async()=>{}}},
+   metadataCache:{getFileCache:()=>null}
+ };
+ const plugin=new h.Plugin(app);
+ await plugin.onload();
+ await plugin.openStudy();
+ const initial=plugin._studyModal;
+ assert(initial,'first open must create a modal');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(initial._closed,false);
+ initial._clearCardMedia=()=>{throw Error('simulated PDF viewer teardown failure')};
+ assert.doesNotThrow(()=>initial.close(),'cleanup failure must not trap the modal');
+ assert.equal(plugin._studyModal,null,'closed modal reference must clear');
+ await plugin.openStudy();
+ const second=plugin._studyModal;
+ assert(second && second!==initial,'must construct a new modal on the second open');
+ second.close();
+ assert.equal(plugin._studyModal,null);
+ plugin._studyModal={_closed:true,modalEl:{isConnected:false},
+   close(){this._closed=true;}};
+ await plugin.openStudy();
+ assert(plugin._studyModal && plugin._studyModal._closed!==true,
+   'an orphaned detached modal must not permanently block reopening');
+ plugin._studyModal.close();
+ assert.equal(plugin._studyModal,null);
+ h.close();
+});
+test('failed modal startup and late card-read rejection do not block another open',async()=>{
+ const h=harness(),app={
+   vault:{configDir:'.obsidian',on:()=>({}),getMarkdownFiles:()=>[],
+     adapter:{exists:async()=>false,read:async()=>'',write:async()=>{}}},
+   metadataCache:{getFileCache:()=>null}
+ };
+ const plugin=new h.Plugin(app);await plugin.onload();
+ const original=h.api.AkebiStudyModal.prototype._renderShell;
+ h.api.AkebiStudyModal.prototype._renderShell=function(){throw Error('simulated startup failure')};
+ try{
+   await plugin.openStudy();
+   assert.equal(plugin._studyModal,null,'failed startup must release its owner reference');
+ }finally{h.api.AkebiStudyModal.prototype._renderShell=original;}
+ await plugin.openStudy();
+ assert(plugin._studyModal,'startup must work again after an earlier failure');
+ const modal=plugin._studyModal;
+ let reject;
+ modal._showError=()=>{throw Error('late failure rendered into an already-closed modal')};
+ modal._loadCards=()=>new Promise((_,rejectFn)=>{reject=rejectFn;});
+ modal.close();
+ assert.equal(plugin._studyModal,null);
+ // A pending background reader can finish after the view has gone away.
+ modal.onOpen();
+ await Promise.resolve(); // _loadCards is intentionally scheduled in a microtask.
+ assert.equal(typeof reject,'function');
+ modal.close();
+ reject(Error('late read failure'));
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(plugin._studyModal,null);
+ await plugin.openStudy();
+ assert(plugin._studyModal && plugin._studyModal!==modal);
+ plugin._studyModal.close();h.close();
+});
