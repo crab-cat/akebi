@@ -390,8 +390,8 @@ test('estimated weak is counted in donut/weak filter, ordered by recall risk, an
  h.close();
 });
 
-test('repeated open/close survives PDF cleanup failure and a detached stale modal',async()=>{
- const h=harness();
+test('repeated open/close survives PDF cleanup failure and a detached stale modal',async(t)=>{
+ const h=harness();t.after(()=>h.close());
  const app={
    vault:{configDir:'.obsidian',on:()=>({}),
      getMarkdownFiles:()=>[],
@@ -422,8 +422,8 @@ test('repeated open/close survives PDF cleanup failure and a detached stale moda
  assert.equal(JSON.stringify(plugin._mastery),firstHash,'open/close must not grade a card');
  h.close();
 });
-test('failed modal startup and late card-read rejection do not block another open',async()=>{
- const h=harness(),app={
+test('failed modal startup and late card-read rejection do not block another open',async(t)=>{
+ const h=harness();t.after(()=>h.close());const app={
    vault:{configDir:'.obsidian',on:()=>({}),getMarkdownFiles:()=>[],
      adapter:{exists:async()=>false,read:async()=>'',write:async()=>{}}},
    metadataCache:{getFileCache:()=>null}
